@@ -20,4 +20,5 @@ app.use('/api/settings', require('./routes/settingRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/procedures', require('./routes/procedureRoutes'));
 app.use('/api/audit-logs', require('./routes/auditRoutes'));
+app.use('/api/auth', require('./routes/authRoutes'));
 module.exports = app;

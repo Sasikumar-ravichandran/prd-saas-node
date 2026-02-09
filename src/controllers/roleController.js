@@ -1,6 +1,5 @@
 const RoleConfig = require('../models/RoleConfig');
 
-// Default Permissions (Fallback if DB is empty)
 const DEFAULT_PERMISSIONS = {
   admin: ['fin_view_revenue', 'fin_edit_invoice', 'fin_discounts', 'pt_delete', 'pt_export', 'ops_settings', 'ops_calendar'],
   doctor: ['fin_view_revenue', 'ops_calendar'],
@@ -9,49 +8,64 @@ const DEFAULT_PERMISSIONS = {
 };
 
 // @desc    Get permissions map
-// @route   GET /api/settings/roles
 const getRoleConfig = async (req, res) => {
   try {
-    // In a real SaaS, we would find by clinicId: { clinicId: req.user.clinicId }
-    // For now, we just find the first document (assuming single setup)
-    let config = await RoleConfig.findOne();
+  
+    if (!req.user?.clinicId) {
+        console.error("User has no Clinic ID linked.");
+        // Return default permissions temporarily so frontend doesn't break
+        return res.json(DEFAULT_PERMISSIONS);
+    }
+
+    //  Find Config
+    let config = await RoleConfig.findOne({ clinicId: req.user.clinicId });
 
     if (!config) {
-      // If no config exists, create the default one
-      config = await RoleConfig.create({
-        permissions: DEFAULT_PERMISSIONS
-      });
+      try {
+        config = await RoleConfig.create({
+          clinicId: req.user.clinicId,
+          permissions: DEFAULT_PERMISSIONS
+        });
+      } catch (createErr) {
+        // Fallback: Send defaults even if DB save failed
+        return res.json(DEFAULT_PERMISSIONS);
+      }
     }
 
     res.json(config.permissions);
+
   } catch (error) {
-    console.error("Error fetching roles:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Update permissions for a specific role
-// @route   PUT /api/settings/roles
+// @desc    Update permissions
 const updateRoleConfig = async (req, res) => {
   try {
-    const { roleId, permissions } = req.body; // e.g. { roleId: 'doctor', permissions: ['ops_calendar'] }
+    const { roleId, permissions } = req.body; 
 
-    let config = await RoleConfig.findOne();
-    if (!config) {
-        config = await RoleConfig.create({ permissions: DEFAULT_PERMISSIONS });
+    if (!req.user.clinicId) {
+        return res.status(400).json({ message: 'User not linked to clinic' });
     }
 
-    // Update the specific role's array
-    config.permissions[roleId] = permissions;
+    let config = await RoleConfig.findOne({ clinicId: req.user.clinicId });
     
-    // Mark the field as modified (Mongoose sometimes misses nested object updates)
+    if (!config) {
+        config = await RoleConfig.create({
+            clinicId: req.user.clinicId,
+            permissions: DEFAULT_PERMISSIONS
+        });
+    }
+
+    // Update permission
+    config.permissions[roleId] = permissions;
     config.markModified('permissions'); 
 
     await config.save();
-
     res.json(config.permissions);
+
   } catch (error) {
-    console.error("Error updating roles:", error);
+    console.error("Update Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };

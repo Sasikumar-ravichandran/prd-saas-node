@@ -8,7 +8,8 @@ const PatientSchema = new mongoose.Schema(
     clinicId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Clinic',
-      // required: true, // Keep commented until we build Auth/Login
+      required: true,
+      index: true
     },
 
     // ===== 2. Patient Identity =====
