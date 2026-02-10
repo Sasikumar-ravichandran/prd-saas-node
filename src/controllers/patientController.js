@@ -6,7 +6,6 @@ const mongoose = require('mongoose');
 // @access  Private (Clinic Staff Only)
 const createPatient = async (req, res) => {
   try {
-    // 1. Destructure data
     const {
       fullName, age, gender, mobile, bloodGroup,
       emergencyContact, emergencyRelation,
@@ -15,20 +14,36 @@ const createPatient = async (req, res) => {
       attachments 
     } = req.body;
 
-    // 2. Simple Validation
     if (!fullName || !mobile || !assignedDoctor) {
       return res.status(400).json({ message: 'Name, Mobile, and Doctor are required.' });
     }
 
-    // 3. Auto-Generate Patient ID (Scoped to Clinic)
-    // We count only THIS clinic's patients. So every clinic starts at PID-1001.
-    const count = await Patient.countDocuments({ clinicId: req.user.clinicId });
-    const nextId = 1001 + count; 
+    // --- FIX STARTS HERE ---
+    
+    // 1. Find the patient with the highest ID (Sort descending by natural creation or ID)
+    // We filter by clinicId so we only look at THIS clinic's IDs
+    const lastPatient = await Patient.findOne({ clinicId: req.user.clinicId })
+      .sort({ patientId: -1 }) // Get the latest ID (e.g., PID-1005)
+      .collation({ locale: "en_US", numericOrdering: true }); // Ensures PID-10 comes after PID-9
+
+    let nextId = 1001; // Default if no patients exist yet
+
+    if (lastPatient && lastPatient.patientId) {
+      // Extract the number: "PID-1005" -> "1005" -> 1005
+      const lastIdStr = lastPatient.patientId.replace('PID-', '');
+      const lastIdNum = parseInt(lastIdStr);
+      
+      if (!isNaN(lastIdNum)) {
+        nextId = lastIdNum + 1; // Increment: 1006
+      }
+    }
+
     const patientId = `PID-${nextId}`;
 
-    // 4. Create the new Patient Object
+    // --- FIX ENDS HERE ---
+
     const patient = await Patient.create({
-      clinicId: req.user.clinicId, // <--- CRITICAL: Binds patient to this clinic
+      clinicId: req.user.clinicId,
       patientId, 
       fullName,
       age,
@@ -56,6 +71,10 @@ const createPatient = async (req, res) => {
 
   } catch (error) {
     console.error("Error creating patient:", error);
+    // Handle duplicate key error specifically
+    if (error.code === 11000) {
+        return res.status(400).json({ message: 'Error generating ID. Please try again.' });
+    }
     res.status(500).json({ message: 'Server Error' });
   }
 };
