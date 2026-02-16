@@ -5,11 +5,6 @@ const Clinic = require('../models/Clinic');
 // @access  Private (Admin/Staff)
 const getClinicProfile = async (req, res) => {
     try {
-        // --- DEBUG LOGS ---
-        console.log("Logged in User:", req.user); 
-        console.log("Clinic ID from User:", req.user?.clinicId);
-        // ------------------
-
         if (!req.user || !req.user.clinicId) {
             console.log("❌ Missing Clinic ID on User");
             return res.json([]); 

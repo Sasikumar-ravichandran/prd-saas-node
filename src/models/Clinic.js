@@ -23,7 +23,7 @@ const ClinicSchema = new mongoose.Schema({
 
 	// Branding (We will use this in the Branding Tab later)
 	logo: { type: String },
-	primaryColor: { type: String, default: '#0f172a' }
+	primaryColor: { type: String, default: '#1976d2' }
 
 }, { timestamps: true });
 

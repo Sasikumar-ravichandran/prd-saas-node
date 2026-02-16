@@ -12,6 +12,8 @@ const PatientSchema = new mongoose.Schema(
       index: true
     },
 
+    branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
+
     // ===== 2. Patient Identity =====
     fullName: {
       type: String,
@@ -22,7 +24,6 @@ const PatientSchema = new mongoose.Schema(
 
     patientId: {
       type: String,
-      unique: true, // Ensures no two patients have ID 'PID-1001'
     },
 
     mobile: {

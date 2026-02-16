@@ -9,6 +9,8 @@ const PaymentSchema = new mongoose.Schema({
 		index: true // Index for fast filtering
 	},
 
+	branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
+
 	// Link to the Patient
 	patientId: {
 		type: mongoose.Schema.Types.ObjectId,

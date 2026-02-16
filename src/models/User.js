@@ -10,27 +10,37 @@ const UserSchema = new mongoose.Schema({
 		index: true // Index for fast filtering
 	},
 
+	// NEW: Which branches can this user access?
+	allowedBranches: [{
+		type: mongoose.Schema.Types.ObjectId,
+		ref: 'Branch'
+	}],
+
+	// NEW: Default branch (where they log in initially)
+	defaultBranch: {
+		type: mongoose.Schema.Types.ObjectId,
+		ref: 'Branch'
+	},
+
 	name: { type: String, required: true },
 	email: { type: String, required: true, unique: true },
-
 	// In a real app, this would be hashed (bcrypt). 
 	// For now, we store it simply to get the CRUD working.
 	password: { type: String, default: '123456' },
 
 	role: {
 		type: String,
-		enum: ['Administrator', 'Doctor', 'Receptionist', 'Nurse'],
+		enum: ['Administrator', 'Doctor', 'Receptionist'],
 		default: 'Receptionist'
 	},
+	mobile: { type: String, required: false },
 
 	status: {
 		type: String,
 		enum: ['Active', 'Inactive', 'Pending'],
 		default: 'Active'
 	},
-
-	// Link to Clinic (for multi-tenancy later)
-	// clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic' }
+	mustChangePassword: { type: Boolean, default: false }
 
 }, { timestamps: true });
 

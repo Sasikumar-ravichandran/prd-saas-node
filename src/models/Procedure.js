@@ -10,7 +10,7 @@ const ProcedureSchema = new mongoose.Schema({
   },
 
   // Unique Code (e.g., RCT-01) - Great for quick lookup
-  code: { type: String, required: true, unique: true, uppercase: true, trim: true },
+  code: { type: String, required: true, uppercase: true, trim: true },
 
   name: { type: String, required: true, trim: true },
 

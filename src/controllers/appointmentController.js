@@ -1,11 +1,14 @@
 const Appointment = require('../models/Appointment');
 
-// @desc    Get all appointments for the logged-in clinic
+// @desc    Get all appointments (Scoped to Active Branch)
 // @route   GET /api/appointments
 const getAppointments = async (req, res) => {
   try {
-    // SECURITY: Only fetch appointments for this clinic
-    const appointments = await Appointment.find({ clinicId: req.user.clinicId });
+    // SECURITY: Only fetch appointments for this clinic AND this branch
+    const appointments = await Appointment.find({ 
+        clinicId: req.user.clinicId,
+        branchId: req.branchId // <--- FILTER BY BRANCH
+    });
     res.json(appointments);
   } catch (error) {
     console.error("Error fetching appointments:", error);
@@ -27,7 +30,8 @@ const createAppointment = async (req, res) => {
     }
 
     const appointment = await Appointment.create({
-      clinicId: req.user.clinicId, // <--- Securely bind to clinic
+      clinicId: req.user.clinicId, 
+      branchId: req.branchId, // <--- BIND TO ACTIVE BRANCH
       patientId,
       title,
       phone,
@@ -55,11 +59,16 @@ const updateAppointment = async (req, res) => {
     const { id } = req.params;
     const { start, end, resourceId, title, docId, type, status } = req.body;
 
-    // 1. Find Appointment (Ensure it belongs to this clinic)
-    let appointment = await Appointment.findOne({ _id: id, clinicId: req.user.clinicId });
+    // 1. Find Appointment (Ensure it belongs to this clinic AND branch)
+    // This prevents a user from editing an appointment ID that belongs to another branch
+    let appointment = await Appointment.findOne({ 
+        _id: id, 
+        clinicId: req.user.clinicId,
+        branchId: req.branchId // <--- SECURITY CHECK
+    });
 
     if (!appointment) {
-      return res.status(404).json({ message: 'Appointment not found' });
+      return res.status(404).json({ message: 'Appointment not found in this branch' });
     }
 
     // 2. Update Fields (Only update what is sent)
@@ -85,10 +94,16 @@ const updateAppointment = async (req, res) => {
 const deleteAppointment = async (req, res) => {
   try {
     const { id } = req.params;
-    const appointment = await Appointment.findOneAndDelete({ _id: id, clinicId: req.user.clinicId });
+    
+    // SECURITY: Ensure we only delete from the active branch
+    const appointment = await Appointment.findOneAndDelete({ 
+        _id: id, 
+        clinicId: req.user.clinicId,
+        branchId: req.branchId // <--- SECURITY CHECK
+    });
 
     if (!appointment) {
-      return res.status(404).json({ message: 'Appointment not found' });
+      return res.status(404).json({ message: 'Appointment not found or access denied' });
     }
 
     res.json({ message: 'Appointment removed' });

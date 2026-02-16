@@ -8,7 +8,7 @@ const AuditLogSchema = new mongoose.Schema({
 		required: true,
 		index: true // Index for fast filtering
 	},
-
+	branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
 	// WHO did it?
 	userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 	userName: { type: String }, // Store snapshot of name in case user is deleted
