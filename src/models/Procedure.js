@@ -1,36 +1,27 @@
 const mongoose = require('mongoose');
 
 const ProcedureSchema = new mongoose.Schema({
+  clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', required: true },
 
-  clinicId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Clinic',
-    required: true,
-    index: true // Index for fast filtering
+  // 1. Identification
+  code: { type: String, required: true, uppercase: true, trim: true }, 
+  name: { type: String, required: true, trim: true }, 
+
+  // 2. Category (For Analytics)
+  category: { 
+    type: String, 
+    enum: ['Consultation', 'General', 'Endodontics', 'Orthodontics', 'Surgery', 'Prosthetics'],
+    default: 'General'
   },
 
-  // Unique Code (e.g., RCT-01) - Great for quick lookup
-  code: { type: String, required: true, uppercase: true, trim: true },
+  // 3. Financials
+  price: { type: Number, required: true, min: 0 }, 
 
-  name: { type: String, required: true, trim: true },
+  // ⚡️ CRITICAL: Keep this! 
+  // This is the "Expense" attached to the work, regardless of who does it.
+  labCost: { type: Number, default: 0 }, 
 
-  price: { type: Number, required: true, min: 0 },
-
-  // Tax Percentage (GST/VAT)
-  //   tax: { type: Number, default: 0, min: 0 },
-
-  // Doctor Commission Percentage (0-100%)
-  commission: { type: Number, default: 0, min: 0, max: 100 },
-
-  // Estimated Lab Cost (Internal Reference)
-  //   labCost: { type: Number, default: 0 },
-
-  // Is this procedure currently offered?
   isActive: { type: Boolean, default: true },
-
-  // Link to Clinic (for multi-tenancy later)
-  // clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic' }
-
 }, { timestamps: true });
 
 module.exports = mongoose.model('Procedure', ProcedureSchema);

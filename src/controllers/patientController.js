@@ -1,6 +1,7 @@
 const Patient = require('../models/Patient');
 const mongoose = require('mongoose');
-
+const fs = require('fs');
+const path = require('path');
 // @desc    Create a new patient
 // @route   POST /api/patients
 // @access  Private (Clinic Staff Only)
@@ -369,6 +370,150 @@ const updatePatient = async (req, res) => {
   }
 };
 
+// @desc    Upload Patient Attachment (Photo or X-Ray)
+// @route   POST /api/patients/:id/upload
+const uploadAttachment = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    const { id } = req.params;
+    const { type } = req.body; // 'photo' or 'xray'
+
+    // 1. Find Patient (Secure)
+    const patient = await Patient.findOne({ 
+      _id: id, 
+      clinicId: req.user.clinicId, 
+      branchId: req.branchId 
+    });
+
+    if (!patient) {
+      // Clean up the uploaded file if patient not found
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({ message: 'Patient not found' });
+    }
+
+    // 2. Construct File Path (Store relative path in DB)
+    // Assuming you serve static files from a 'uploads' folder
+    const filePath = `/uploads/${req.file.filename}`;
+
+    // 3. Update Patient Data
+    if (type === 'photo') {
+      // If replacing profile photo, you might want to delete the old file here
+      patient.attachments.photo = filePath;
+    } else {
+      // Default to X-Ray/Document array
+      // Initialize array if it doesn't exist
+      if (!patient.attachments) patient.attachments = { xrays: [] };
+      if (!patient.attachments.xrays) patient.attachments.xrays = [];
+      
+      patient.attachments.xrays.push(filePath);
+    }
+
+    await patient.save();
+
+    res.json({ 
+      message: 'File uploaded successfully', 
+      filePath, 
+      attachments: patient.attachments 
+    });
+
+  } catch (error) {
+    console.error("Upload Error:", error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+
+const deleteAttachment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { fileUrl } = req.body; // Expecting the relative path like "/uploads/file-123.jpg"
+
+    if (!fileUrl) return res.status(400).json({ message: 'File URL is required' });
+
+    // 1. Find the Patient
+    const patient = await Patient.findOne({ 
+      _id: id, 
+      clinicId: req.user.clinicId, 
+      branchId: req.branchId 
+    });
+
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
+
+    // 2. Remove from Database Array
+    // We filter out the matching URL
+    if (patient.attachments && patient.attachments.xrays) {
+        patient.attachments.xrays = patient.attachments.xrays.filter(url => url !== fileUrl);
+    }
+    
+    // Also check 'photo' if it matches
+    if (patient.attachments.photo === fileUrl) {
+        patient.attachments.photo = "";
+    }
+
+    await patient.save();
+
+    // 3. Delete from Server Disk (File System)
+    // Construct the absolute path: e.g., C:\Projects\DentalApp\backend\uploads\file-123.jpg
+    // NOTE: Adjust '..' segments based on where this controller file is located relative to root
+    const absolutePath = path.join(__dirname, '..', '..', fileUrl); 
+    
+    if (fs.existsSync(absolutePath)) {
+        fs.unlinkSync(absolutePath); // This deletes the file
+        console.log(`Deleted file: ${absolutePath}`);
+    } else {
+        console.warn(`File not found on disk: ${absolutePath}`);
+    }
+
+    res.json({ message: 'File deleted successfully', attachments: patient.attachments });
+
+  } catch (error) {
+    console.error("Delete Error:", error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+
+const bulkCompleteTreatments = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { treatmentIds } = req.body; // Array of treatment _ids from the modal
+
+        // 1. Find the patient
+        const patient = await Patient.findById(id);
+
+        if (!patient) {
+            return res.status(404).json({ message: 'Patient not found' });
+        }
+
+        // 2. Loop through their treatment plan and update the matching IDs
+        let isModified = false;
+        
+        patient.treatmentPlan.forEach(treatment => {
+            // Convert ObjectIds to strings for safe comparison
+            if (treatmentIds.includes(treatment._id.toString())) {
+                treatment.status = 'Completed';
+                isModified = true;
+            }
+        });
+
+        // 3. Save the patient if changes were made
+        if (isModified) {
+            // Mongoose needs to know the array was modified
+            patient.markModified('treatmentPlan'); 
+            await patient.save();
+        }
+
+        res.json({ message: 'Treatments marked as completed', patient });
+
+    } catch (error) {
+        console.error("Bulk Complete Treatments Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 module.exports = {
   createPatient,
   getPatients,
@@ -378,5 +523,8 @@ module.exports = {
   startTreatment,
   deleteTreatment,
   updateTreatmentStatus,
-  updatePatient
+  updatePatient,
+  uploadAttachment,
+  deleteAttachment,
+  bulkCompleteTreatments
 };

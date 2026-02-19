@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-
+const path = require('path');
 const app = express();
 
 // --- Middleware ---
@@ -25,4 +25,9 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/appointments', require('./routes/appointmentRoutes'));
 app.use('/api/branches', require('./routes/branchRoutes'));
 app.use('/api/inventory', require('./routes/inventoryRoutes'));
+app.use('/api/prescriptions', require('./routes/prescriptionRoutes'));
+app.use('/api/clinical-notes', require('./routes/clinicalNoteRoutes'));
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+app.use('/api/invoices', require('./routes/invoiceRoutes'));
+
 module.exports = app;

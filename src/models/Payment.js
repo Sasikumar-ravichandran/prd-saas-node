@@ -33,7 +33,12 @@ const PaymentSchema = new mongoose.Schema({
 	// Receipt Number (Auto-generated usually, simplified here)
 	receiptNumber: { type: String },
 
-	notes: { type: String }
+	notes: { type: String },
+	invoiceId: { 
+        type: mongoose.Schema.Types.ObjectId, 
+        ref: 'Invoice',
+        required: false
+    },
 
 }, { timestamps: true });
 

@@ -8,10 +8,10 @@ const {
 } = require('../controllers/procedureController');
 
 // 1. Import the middleware
-const { protect, adminOnly } = require('../middleware/authMiddleware');
+const { protect } = require('../middleware/authMiddleware');
 
 // Apply protection to all routes in this file
-router.use(protect, adminOnly);
+router.use(protect);
 
 router.route('/')
   .get(getProcedures)

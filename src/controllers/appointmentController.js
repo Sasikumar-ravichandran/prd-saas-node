@@ -113,9 +113,33 @@ const deleteAppointment = async (req, res) => {
   }
 };
 
+const updateAppointmentStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body; // Expects 'In Progress', 'Completed', or 'Cancelled'
+
+        // Find the appointment and update ONLY the status
+        const appointment = await Appointment.findByIdAndUpdate(
+            id, 
+            { status: status },
+            { new: true } // Returns the updated document
+        );
+
+        if (!appointment) {
+            return res.status(404).json({ message: 'Appointment not found' });
+        }
+
+        res.json(appointment);
+    } catch (error) {
+        console.error("Update Status Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
 module.exports = {
   getAppointments,
   createAppointment,
   updateAppointment,
-  deleteAppointment
+  deleteAppointment,
+  updateAppointmentStatus
 };

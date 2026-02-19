@@ -1,13 +1,14 @@
 const Payment = require('../models/Payment');
 const Patient = require('../models/Patient');
 const mongoose = require('mongoose');
+const Invoice = require('../models/Invoice');
 
 // @desc    Record a new payment
 // @route   POST /api/payments
 // @access  Private (Clinic Staff)
 const addPayment = async (req, res) => {
     try {
-        const { patientId, amount, method, transactionId, notes } = req.body;
+        const { patientId, amount, method, transactionId, notes, invoiceId } = req.body;
 
         // 1. SECURITY: Validate Patient belongs to MY Clinic AND Active Branch
         const patient = await Patient.findOne({
@@ -33,8 +34,27 @@ const addPayment = async (req, res) => {
             transactionId,
             receiptNumber,
             notes,
+            invoiceId: invoiceId || null,
             recordedBy: req.user._id // Good for auditing who took the money
         });
+
+        if (invoiceId) {
+            const invoice = await Invoice.findById(invoiceId);
+            if (invoice) {
+                invoice.paidAmount += Number(amount);
+                invoice.balance = invoice.finalAmount - invoice.paidAmount;
+
+                // Auto-update status
+                if (invoice.balance <= 0) {
+                    invoice.status = 'Paid';
+                    invoice.balance = 0; // Prevent negative balance
+                } else {
+                    invoice.status = 'Partial';
+                }
+                
+                await invoice.save();
+            }
+        }
 
         // 4. Update Patient Balance
         patient.totalPaid = (patient.totalPaid || 0) + Number(amount);
@@ -99,7 +119,8 @@ const getPatientLedger = async (req, res) => {
                 description: t.procedure,
                 type: 'DEBIT',
                 amount: t.cost,
-                tooth: t.tooth
+                tooth: t.tooth,
+                status: t.status
             }));
 
         // B. Format Payments (Credits)

@@ -12,7 +12,7 @@ const { protect, adminOnly } = require('../middleware/authMiddleware');
 router.get('/clinic', protect, getClinicProfile);
 
 // PUT: Only Admins can update the clinic profile
-router.put('/clinic', protect, adminOnly, updateClinicProfile);
+router.put('/clinic', protect, updateClinicProfile);
 
 
 // ==========================================
@@ -25,6 +25,6 @@ router.get('/roles', protect, getRoleConfig);
 
 // PUT: Only Admins can change permissions
 // (You previously had 'updateClinicProfile' here by mistake)
-router.put('/roles', protect, adminOnly, updateRoleConfig);
+router.put('/roles', protect, updateRoleConfig);
 
 module.exports = router;

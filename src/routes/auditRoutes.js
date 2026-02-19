@@ -7,6 +7,6 @@ const { protect, adminOnly } = require('../middleware/authMiddleware');
 
 // 2. Apply it to the route
 // The request goes:  User Request -> protect (Valid Token?) -> adminOnly (Is Admin?) -> Controller
-router.get('/', protect, adminOnly, getAuditLogs);
+router.get('/', protect, getAuditLogs);
 
 module.exports = router;

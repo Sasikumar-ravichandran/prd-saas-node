@@ -1,7 +1,7 @@
 const User = require('../models/User');
 const Clinic = require('../models/Clinic');
 const RoleConfig = require('../models/RoleConfig');
-const Branch = require('../models/Branch'); // Ensure Branch is imported
+const Branch = require('../models/Branch');
 const jwt = require('jsonwebtoken');
 
 // Generate JWT
@@ -11,42 +11,46 @@ const generateToken = (id) => {
 
 // @desc    Register New Clinic (Admin Sign Up)
 // @route   POST /api/auth/register
+// controllers/authController.js
+
 const registerClinic = async (req, res) => {
   try {
-    const { clinicName, adminName, email, password } = req.body;
+    const { clinicName, fullName, email, password } = req.body;
+
+    // 1. Validation
+    if (!fullName || !clinicName || !email || !password) {
+      return res.status(400).json({ message: "Missing required fields." });
+    }
+
     const userExists = await User.findOne({ email });
     if (userExists) {
-      console.log('2222')
       return res.status(400).json({ message: 'User with this email already exists' });
     }
 
-    // Generate Clinic Short ID (Collision Check)
-    let shortId;
-    let isUnique = false;
-    while (!isUnique) {
-      shortId = `CL-${Math.floor(1000 + Math.random() * 9000)}`;
-      const existing = await Clinic.findOne({ clinicId: shortId });
-      if (!existing) isUnique = true;
-    }
-
+    // 2. Create Clinic
+    let shortId = `CL-${Math.floor(1000 + Math.random() * 9000)}`;
     const clinic = await Clinic.create({
       name: clinicName,
       clinicId: shortId
     });
 
-    // Create Admin User (INITIALLY NO BRANCH)
-    // The frontend will detect 'defaultBranch: null' and redirect to /setup-branch
+    // 3. Create Admin User (WITHOUT BRANCH)
+    // This allows your frontend to catch 'defaultBranch: null' and redirect.
     const user = await User.create({
       clinicId: clinic._id,
-      name: adminName,
+      fullName: fullName,
       email,
       password,
       role: 'Administrator',
-      allowedBranches: [], 
-      defaultBranch: null  
+
+      // ⚡️ KEY: Set this to null so the frontend knows to redirect!
+      defaultBranch: null,
+      allowedBranches: [],
+
+      doctorConfig: { commissionPercentage: 0 }
     });
 
-    // Initialize Permissions
+    // 4. Initialize Permissions
     await RoleConfig.create({
       clinicId: clinic._id,
       permissions: {
@@ -60,18 +64,19 @@ const registerClinic = async (req, res) => {
 
     res.status(201).json({
       _id: user._id,
-      name: user.name,
+      fullName: user.fullName,
       email: user.email,
       role: user.role,
-      clinicId: clinic._id, 
-      clinicShortId: clinic.clinicId, 
+      clinicId: clinic._id,
       token: generateToken(user._id),
-      defaultBranch: null // Triggers "Setup Branch" flow
+
+      // ⚡️ Return null so frontend redirects to /setup-branch
+      defaultBranch: null
     });
 
   } catch (error) {
     console.error("Registration Error:", error);
-    res.status(500).json({ message: 'Server Error' });
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -81,17 +86,14 @@ const loginUser = async (req, res) => {
   const { email, password, clinicShortId } = req.body;
 
   try {
-    // 1. Find User & Populate Branch Context
-    // We explicitly need the 'name' and 'branchCode' for the UI
     const user = await User.findOne({ email })
-        .populate('clinicId')
-        .populate('defaultBranch', 'name branchCode') 
-        .populate('allowedBranches', 'name branchCode');
+      .populate('clinicId')
+      .populate('defaultBranch', 'name branchName branchCode')
+      .populate('allowedBranches', 'name branchName branchCode');
 
-    // 2. Validate User & Password
     if (user && (await user.matchPassword(password))) {
 
-      // 3. SECURITY: Staff Check
+      // Staff Check
       if (user.role !== 'Administrator') {
         if (!clinicShortId) {
           return res.status(400).json({ message: 'Clinic ID is required for staff login.' });
@@ -101,38 +103,32 @@ const loginUser = async (req, res) => {
         }
       }
 
-      // Force Password Change Check
+      // Password Change Check
       if (user.mustChangePassword) {
         return res.json({
           _id: user._id,
-          name: user.name,
+          fullName: user.fullName, // Use fullName
           email: user.email,
           role: user.role,
           token: generateToken(user._id),
-          requirePasswordChange: true 
+          requirePasswordChange: true
         });
       }
 
-      // 4. Success Response
       res.json({
         _id: user._id,
-        name: user.name,
+        fullName: user.fullName, // Use fullName
         email: user.email,
         role: user.role,
-        clinicId: user.clinicId._id,        
-        clinicShortId: user.clinicId.clinicId, 
+        clinicId: user.clinicId._id,
+        clinicShortId: user.clinicId.clinicId,
         token: generateToken(user._id),
 
-        // --- BRANCH DATA ---
-        // 1. The ID used for API Headers
-        defaultBranch: user.defaultBranch?._id || null, 
-        
-        // 2. The Display Data (e.g. "Anna Nagar", "BID-001")
+        // Branch Data
+        defaultBranch: user.defaultBranch?._id || null,
         branchName: user.defaultBranch?.name || null,
         branchCode: user.defaultBranch?.branchCode || null,
-        
-        // 3. The Switcher Options
-        allowedBranches: user.allowedBranches || [] 
+        allowedBranches: user.allowedBranches || []
       });
 
     } else {
@@ -148,28 +144,25 @@ const loginUser = async (req, res) => {
 // @route   PUT /api/auth/password
 const changePassword = async (req, res) => {
   const { oldPassword, newPassword } = req.body;
-  
-  // 1. Find User with Population (To keep state consistent after update)
+
   const user = await User.findById(req.user._id)
-    .populate('defaultBranch', 'name branchCode')
-    .populate('allowedBranches', 'name branchCode');
+    .populate('defaultBranch', 'name branchName branchCode')
+    .populate('allowedBranches', 'name branchName branchCode');
 
   if (user && (await user.matchPassword(oldPassword))) {
-    user.password = newPassword; 
-    user.mustChangePassword = false; 
-    user.status = 'Active'; 
-    
+    user.password = newPassword;
+    user.mustChangePassword = false;
+    user.status = 'Active';
+
     await user.save();
-    
-    // 2. Return Full Object (So frontend doesn't lose branch info)
+
     res.json({
       _id: user._id,
-      name: user.name,
+      fullName: user.fullName, // Use fullName
       email: user.email,
       role: user.role,
       token: generateToken(user._id),
 
-      // Preserve Branch Data
       defaultBranch: user.defaultBranch?._id || null,
       branchName: user.defaultBranch?.name || null,
       branchCode: user.defaultBranch?.branchCode || null,

@@ -5,15 +5,14 @@ const Procedure = require('../models/Procedure');
 // @access  Private
 const getProcedures = async (req, res) => {
 	try {
-
 		if (!req.user || !req.user.clinicId) {
 			return res.json([]);
 		}
 
-		// SECURITY: Only find procedures linked to the logged-in user's clinic
 		const procedures = await Procedure.find({
-			clinicId: req.user.clinicId // <--- FILTER
-		}).sort({ code: 1 });
+			clinicId: req.user.clinicId
+		})
+			.sort({ category: 1, code: 1 }); // Sorted by Category first, then Code
 
 		res.json(procedures);
 	} catch (error) {
@@ -25,104 +24,100 @@ const getProcedures = async (req, res) => {
 // @route   POST /api/procedures
 // @access  Private
 const createProcedure = async (req, res) => {
-	try {
-		const { code, name, price, commission, active } = req.body;
+    try {
+        // ⚡️ UPDATED: Added labCost & category, Removed commission
+        const { code, name, price, labCost, category, active } = req.body;
 
-		// SECURITY: Check for duplicates ONLY within this clinic
-		// (Dr. A can have '101' and Dr. B can have '101' - that is allowed now)
-		const exists = await Procedure.findOne({
-			code,
-			clinicId: req.user.clinicId // <--- SCOPED CHECK
-		});
+        // Check for duplicates
+        const exists = await Procedure.findOne({
+            code,
+            clinicId: req.user.clinicId 
+        });
 
-		if (exists) {
-			return res.status(400).json({ message: `Procedure code '${code}' already exists in your list.` });
-		}
+        if (exists) {
+            return res.status(400).json({ message: `Procedure code '${code}' already exists.` });
+        }
 
-		// Create Procedure attached to Clinic
-		const procedure = await Procedure.create({
-			clinicId: req.user.clinicId, // <--- BIND TO CLINIC
-			code,
-			name,
-			price,
-			commission,
+        const procedure = await Procedure.create({
+            clinicId: req.user.clinicId,
+            code,
+            name,
+            price,
+            
+            // ⚡️ NEW FIELDS
+            labCost: labCost || 0, 
+            category: category || 'General',
 
-			// Defaults
-			tax: 0,
-			labCost: 0,
+            isActive: active !== undefined ? active : true
+        });
 
-			// Map 'active' -> 'isActive'
-			isActive: active !== undefined ? active : true
-		});
+        res.status(201).json(procedure);
 
-		res.status(201).json(procedure);
-
-	} catch (error) {
-		console.error("Create Procedure Error:", error);
-		res.status(500).json({ message: 'Server Error' });
-	}
+    } catch (error) {
+        console.error("Create Procedure Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
 };
 
 // @desc    Update procedure
 // @route   PUT /api/procedures/:id
 // @access  Private
 const updateProcedure = async (req, res) => {
-	try {
-		const { id } = req.params;
+    try {
+        const { id } = req.params;
 
-		// SECURITY: Find specific doc belonging to THIS clinic
-		// We replace findById(id) with findOne({ _id: id, clinicId: ... })
-		const procedure = await Procedure.findOne({
-			_id: id,
-			clinicId: req.user.clinicId
-		});
+        const procedure = await Procedure.findOne({
+            _id: id,
+            clinicId: req.user.clinicId
+        });
 
-		if (!procedure) return res.status(404).json({ message: 'Procedure not found' });
+        if (!procedure) return res.status(404).json({ message: 'Procedure not found' });
 
-		// Update fields only if sent
-		if (req.body.code) procedure.code = req.body.code;
-		if (req.body.name) procedure.name = req.body.name;
-		if (req.body.price !== undefined) procedure.price = req.body.price;
-		if (req.body.commission !== undefined) procedure.commission = req.body.commission;
+        // Update standard fields
+        if (req.body.code) procedure.code = req.body.code;
+        if (req.body.name) procedure.name = req.body.name;
+        if (req.body.price !== undefined) procedure.price = req.body.price;
 
-		// Handle Status
-		if (req.body.active !== undefined) procedure.isActive = req.body.active;
-		if (req.body.isActive !== undefined) procedure.isActive = req.body.isActive;
+        // ⚡️ NEW FIELDS UPDATES
+        if (req.body.labCost !== undefined) procedure.labCost = req.body.labCost;
+        if (req.body.category) procedure.category = req.body.category;
 
-		const updatedProcedure = await procedure.save();
-		res.json(updatedProcedure);
+        // Handle Status
+        if (req.body.active !== undefined) procedure.isActive = req.body.active;
+        if (req.body.isActive !== undefined) procedure.isActive = req.body.isActive;
 
-	} catch (error) {
-		console.error("Update Error:", error);
-		res.status(500).json({ message: 'Server Error' });
-	}
+        const updatedProcedure = await procedure.save();
+        res.json(updatedProcedure);
+
+    } catch (error) {
+        console.error("Update Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
 };
 
 // @desc    Delete procedure
 // @route   DELETE /api/procedures/:id
 // @access  Private
 const deleteProcedure = async (req, res) => {
-	try {
-		const { id } = req.params;
+    try {
+        const { id } = req.params;
 
-		// SECURITY: Ensure we only delete if it belongs to us
-		const procedure = await Procedure.findOne({
-			_id: id,
-			clinicId: req.user.clinicId
-		});
+        const procedure = await Procedure.findOne({
+            _id: id,
+            clinicId: req.user.clinicId
+        });
 
-		if (!procedure) {
-			return res.status(404).json({ message: 'Procedure not found' });
-		}
+        if (!procedure) {
+            return res.status(404).json({ message: 'Procedure not found' });
+        }
 
-		await procedure.deleteOne();
+        await procedure.deleteOne();
+        res.json({ message: 'Procedure removed successfully' });
 
-		res.json({ message: 'Procedure removed successfully' });
-
-	} catch (error) {
-		console.error("Delete Error:", error);
-		res.status(500).json({ message: 'Server Error' });
-	}
+    } catch (error) {
+        console.error("Delete Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
 };
 
 module.exports = { getProcedures, createProcedure, updateProcedure, deleteProcedure };
