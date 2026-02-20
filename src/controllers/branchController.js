@@ -23,7 +23,8 @@ const createBranch = async (req, res) => {
             branchCode, // "BID-001"
             address,
             phone,
-            isActive: true
+            isActive: true,
+            chairCount: Number(chairCount) || 1
         });
 
         // 3. AUTO-ASSIGN TO ADMIN
@@ -66,11 +67,11 @@ const getBranches = async (req, res) => {
 const updateBranch = async (req, res) => {
     try {
         const { id } = req.params;
-        const { branchName, address, phone } = req.body;
+        const { branchName, address, phone, chairCount } = req.body;
 
         const branch = await Branch.findOneAndUpdate(
             { _id: id, clinicId: req.user.clinicId }, // Security check
-            { branchName, address, phone },
+            { branchName, address, phone, chairCount },
             { new: true }
         );
 

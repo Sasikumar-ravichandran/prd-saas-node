@@ -2,32 +2,39 @@ const mongoose = require('mongoose');
 
 const BranchSchema = new mongoose.Schema({
   // 1. Link to the Parent Clinic
-  clinicId: { 
-    type: mongoose.Schema.Types.ObjectId, 
-    ref: 'Clinic', 
-    required: true 
+  clinicId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Clinic',
+    required: true
   },
 
   // 2. Branch Details (Renamed for clarity)
-  branchName: { 
-    type: String, 
-    required: [true, 'Please add a branch name'] 
-  }, 
-  
+  branchName: {
+    type: String,
+    required: [true, 'Please add a branch name']
+  },
+
   // 3. Unique Code (e.g., BID-001)
-  branchCode: { 
-    type: String, 
-    required: true, 
-    uppercase: true 
-  }, 
+  branchCode: {
+    type: String,
+    required: true,
+    uppercase: true
+  },
+
+  chairCount: {
+    type: Number,
+    default: 1, // Every clinic has at least 1 chair
+    min: 1,
+    max: 50     // Set a reasonable limit
+  },
 
   address: { type: String },
   phone: { type: String },
 
   // 4. Status
-  isActive: { 
-    type: Boolean, 
-    default: true 
+  isActive: {
+    type: Boolean,
+    default: true
   }
 }, { timestamps: true });
 

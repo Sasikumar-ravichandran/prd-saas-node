@@ -115,20 +115,73 @@ const deletePatient = async (req, res) => {
 // @access  Private
 const getPatients = async (req, res) => {
   try {
-    if (!req.user || !req.user.clinicId) {
-      return res.json([]);
+    // 1. Capture Query Parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || '';
+    const doctor = req.query.doctor || '';
+    const filterTab = req.query.filter || 'all'; // 'all', 'due', 'active'
+
+    // Use provided branchId filter, or fallback to the user's current active branch
+    const branchId = req.query.branchId || req.branchId;
+
+    // 2. Build the MongoDB Query Object
+    let query = {
+      clinicId: req.user.clinicId,
+      branchId: branchId
+    };
+
+    // A. Search by Name, Phone, or Patient ID
+    if (search) {
+      query.$or = [
+        { fullName: { $regex: search, $options: 'i' } },
+        { mobile: { $regex: search, $options: 'i' } },
+        { patientId: { $regex: search, $options: 'i' } }
+      ];
     }
 
-    // SECURITY: Only find patients belonging to MY clinic AND Active Branch
-    const patients = await Patient.find({
-      isActive: true,
-      clinicId: req.user.clinicId,
-      branchId: req.branchId // <--- FILTER BY BRANCH
-    }).sort({ createdAt: -1 });
+    // B. Filter by Assigned Doctor
+    if (doctor) {
+      query.assignedDoctor = doctor;
+    }
 
-    res.json(patients);
+    // C. Tab Filters (Active / Dues)
+    if (filterTab === 'active') {
+      query.isActive = true;
+    } else if (filterTab === 'due') {
+      // MongoDB expression: totalCost - totalPaid > 0
+      query.$expr = { $gt: [{ $subtract: [{ $ifNull: ["$totalCost", 0] }, { $ifNull: ["$totalPaid", 0] }] }, 0] };
+    }
+
+    // 3. Execute Paginated Query
+    const skip = (page - 1) * limit;
+
+    const patients = await Patient.find(query)
+      .sort({ updatedAt: -1 }) // Newest first
+      .skip(skip)
+      .limit(limit);
+
+    // 4. Get Total Count for Pagination UI
+    const total = await Patient.countDocuments(query);
+
+    const globalTotal = await Patient.countDocuments({ clinicId: req.user.clinicId, branchId: branchId });
+    const globalPending = await Patient.countDocuments({
+      clinicId: req.user.clinicId,
+      branchId: branchId,
+      $expr: { $gt: [{ $subtract: [{ $ifNull: ["$totalCost", 0] }, { $ifNull: ["$totalPaid", 0] }] }, 0] }
+    });
+
+    res.json({
+      patients,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
+      totalCount: total,
+      globalTotal,      // ⚡️ Send to frontend
+      globalPending     // ⚡️ Send to frontend
+    });
+
   } catch (error) {
-    console.error("Error fetching patients:", error);
+    console.error("Fetch Patients Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
@@ -382,10 +435,10 @@ const uploadAttachment = async (req, res) => {
     const { type } = req.body; // 'photo' or 'xray'
 
     // 1. Find Patient (Secure)
-    const patient = await Patient.findOne({ 
-      _id: id, 
-      clinicId: req.user.clinicId, 
-      branchId: req.branchId 
+    const patient = await Patient.findOne({
+      _id: id,
+      clinicId: req.user.clinicId,
+      branchId: req.branchId
     });
 
     if (!patient) {
@@ -407,16 +460,16 @@ const uploadAttachment = async (req, res) => {
       // Initialize array if it doesn't exist
       if (!patient.attachments) patient.attachments = { xrays: [] };
       if (!patient.attachments.xrays) patient.attachments.xrays = [];
-      
+
       patient.attachments.xrays.push(filePath);
     }
 
     await patient.save();
 
-    res.json({ 
-      message: 'File uploaded successfully', 
-      filePath, 
-      attachments: patient.attachments 
+    res.json({
+      message: 'File uploaded successfully',
+      filePath,
+      attachments: patient.attachments
     });
 
   } catch (error) {
@@ -434,10 +487,10 @@ const deleteAttachment = async (req, res) => {
     if (!fileUrl) return res.status(400).json({ message: 'File URL is required' });
 
     // 1. Find the Patient
-    const patient = await Patient.findOne({ 
-      _id: id, 
-      clinicId: req.user.clinicId, 
-      branchId: req.branchId 
+    const patient = await Patient.findOne({
+      _id: id,
+      clinicId: req.user.clinicId,
+      branchId: req.branchId
     });
 
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
@@ -445,12 +498,12 @@ const deleteAttachment = async (req, res) => {
     // 2. Remove from Database Array
     // We filter out the matching URL
     if (patient.attachments && patient.attachments.xrays) {
-        patient.attachments.xrays = patient.attachments.xrays.filter(url => url !== fileUrl);
+      patient.attachments.xrays = patient.attachments.xrays.filter(url => url !== fileUrl);
     }
-    
+
     // Also check 'photo' if it matches
     if (patient.attachments.photo === fileUrl) {
-        patient.attachments.photo = "";
+      patient.attachments.photo = "";
     }
 
     await patient.save();
@@ -458,13 +511,13 @@ const deleteAttachment = async (req, res) => {
     // 3. Delete from Server Disk (File System)
     // Construct the absolute path: e.g., C:\Projects\DentalApp\backend\uploads\file-123.jpg
     // NOTE: Adjust '..' segments based on where this controller file is located relative to root
-    const absolutePath = path.join(__dirname, '..', '..', fileUrl); 
-    
+    const absolutePath = path.join(__dirname, '..', '..', fileUrl);
+
     if (fs.existsSync(absolutePath)) {
-        fs.unlinkSync(absolutePath); // This deletes the file
-        console.log(`Deleted file: ${absolutePath}`);
+      fs.unlinkSync(absolutePath); // This deletes the file
+      console.log(`Deleted file: ${absolutePath}`);
     } else {
-        console.warn(`File not found on disk: ${absolutePath}`);
+      console.warn(`File not found on disk: ${absolutePath}`);
     }
 
     res.json({ message: 'File deleted successfully', attachments: patient.attachments });
@@ -477,41 +530,41 @@ const deleteAttachment = async (req, res) => {
 
 
 const bulkCompleteTreatments = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { treatmentIds } = req.body; // Array of treatment _ids from the modal
+  try {
+    const { id } = req.params;
+    const { treatmentIds } = req.body; // Array of treatment _ids from the modal
 
-        // 1. Find the patient
-        const patient = await Patient.findById(id);
+    // 1. Find the patient
+    const patient = await Patient.findById(id);
 
-        if (!patient) {
-            return res.status(404).json({ message: 'Patient not found' });
-        }
-
-        // 2. Loop through their treatment plan and update the matching IDs
-        let isModified = false;
-        
-        patient.treatmentPlan.forEach(treatment => {
-            // Convert ObjectIds to strings for safe comparison
-            if (treatmentIds.includes(treatment._id.toString())) {
-                treatment.status = 'Completed';
-                isModified = true;
-            }
-        });
-
-        // 3. Save the patient if changes were made
-        if (isModified) {
-            // Mongoose needs to know the array was modified
-            patient.markModified('treatmentPlan'); 
-            await patient.save();
-        }
-
-        res.json({ message: 'Treatments marked as completed', patient });
-
-    } catch (error) {
-        console.error("Bulk Complete Treatments Error:", error);
-        res.status(500).json({ message: 'Server Error' });
+    if (!patient) {
+      return res.status(404).json({ message: 'Patient not found' });
     }
+
+    // 2. Loop through their treatment plan and update the matching IDs
+    let isModified = false;
+
+    patient.treatmentPlan.forEach(treatment => {
+      // Convert ObjectIds to strings for safe comparison
+      if (treatmentIds.includes(treatment._id.toString())) {
+        treatment.status = 'Completed';
+        isModified = true;
+      }
+    });
+
+    // 3. Save the patient if changes were made
+    if (isModified) {
+      // Mongoose needs to know the array was modified
+      patient.markModified('treatmentPlan');
+      await patient.save();
+    }
+
+    res.json({ message: 'Treatments marked as completed', patient });
+
+  } catch (error) {
+    console.error("Bulk Complete Treatments Error:", error);
+    res.status(500).json({ message: 'Server Error' });
+  }
 };
 
 module.exports = {

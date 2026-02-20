@@ -3,13 +3,24 @@ const User = require('../models/User');
 // @desc    Get all users
 const getUsers = async (req, res) => {
     try {
-        const users = await User.find({ clinicId: req.user.clinicId })
-            .select('-password') 
+        // 1. Base query: always filter by clinicId
+        let query = { clinicId: req.user.clinicId };
+
+        // ⚡️ 2. If the frontend asks for a specific role (e.g., ?role=Doctor), add it!
+        if (req.query.role) {
+            // Using a regex makes it case-insensitive (handles 'doctor' or 'Doctor')
+            query.role = { $regex: new RegExp(`^${req.query.role}$`, 'i') };
+        }
+
+        // 3. Run the query with your existing populate and sort logic
+        const users = await User.find(query)
+            .select('-password')
             .populate('defaultBranch', 'branchName name branchCode') // Get Branch Name
             .sort({ createdAt: -1 });
 
         res.json(users);
     } catch (error) {
+        console.error("Error fetching users:", error);
         res.status(500).json({ message: 'Server Error' });
     }
 };
@@ -17,9 +28,9 @@ const getUsers = async (req, res) => {
 // @desc    Create a new staff member
 const createUser = async (req, res) => {
     try {
-        const { 
+        const {
             name, fullName, email, role, status, mobile, password,
-            allowedBranches, defaultBranch, doctorConfig 
+            allowedBranches, defaultBranch, doctorConfig
         } = req.body;
 
         // 1. Branch Validation
@@ -32,14 +43,14 @@ const createUser = async (req, res) => {
         // 2. Create User
         const user = await User.create({
             clinicId: req.user.clinicId,
-            fullName: fullName || name, 
+            fullName: fullName || name,
             email,
             role,
             status: status || 'Active',
             mobile,
             password: password || '123456', // Default password
             mustChangePassword: true,
-            defaultBranch: targetBranch, 
+            defaultBranch: targetBranch,
             allowedBranches: allowedBranches && allowedBranches.length > 0 ? allowedBranches : [targetBranch],
             doctorConfig: role === 'Doctor' ? doctorConfig : undefined
         });
@@ -83,7 +94,7 @@ const updateUser = async (req, res) => {
 
         // 3. Update Branch
         if (req.body.defaultBranch) user.defaultBranch = req.body.defaultBranch;
-        
+
         // 4. Save
         const updatedUser = await user.save();
 
@@ -112,4 +123,91 @@ const deleteUser = async (req, res) => {
     }
 };
 
-module.exports = { getUsers, createUser, updateUser, deleteUser };
+
+const getMe = async (req, res) => {
+    try {
+        // req.user._id is populated by your authMiddleware
+        const user = await User.findById(req.user._id).select('-password');
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        res.json(user);
+    } catch (error) {
+        console.error("Get Me Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// @desc    Update user profile
+// @route   PUT /api/users/me
+// @access  Private
+const updateMe = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // ⚡️ FIXED: Map incoming data to the correct Model fields (fullName and mobile)
+        if (req.body.fullName || req.body.name) {
+            user.fullName = req.body.fullName || req.body.name;
+        }
+        
+        if (req.body.mobile !== undefined || req.body.phone !== undefined) {
+            user.mobile = req.body.mobile || req.body.phone;
+        }
+
+        const updatedUser = await user.save();
+
+        updatedUser.password = undefined; // Hide password from response
+        res.json(updatedUser);
+
+    } catch (error) {
+        console.error("Update Me Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+// @desc    Change Password
+// @route   PUT /api/users/change-password
+// @access  Private
+const changePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+
+        // Select '+password' because schemas usually exclude it by default
+        const user = await User.findById(req.user._id).select('+password');
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found' });
+        }
+
+        // 1. Verify current password
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Incorrect current password' });
+        }
+
+        // 2. Hash and save new password
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+
+        await user.save();
+
+        res.json({ message: 'Password updated successfully' });
+
+    } catch (error) {
+        console.error("Change Password Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
+};
+
+
+module.exports = {
+    getUsers, createUser, updateUser, deleteUser, getMe,
+    updateMe,
+    changePassword
+};
