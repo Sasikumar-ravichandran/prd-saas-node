@@ -5,7 +5,7 @@ const User = require('../models/User');
 // @route   POST /api/branches
 const createBranch = async (req, res) => {
     try {
-        const { branchName, address, phone } = req.body;
+        const { branchName, address, phone, chairCount } = req.body;
         const clinicId = req.user.clinicId;
 
         // 1. GENERATE BRANCH ID (BID-001, BID-002...)

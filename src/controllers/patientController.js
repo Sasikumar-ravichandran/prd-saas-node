@@ -5,6 +5,7 @@ const path = require('path');
 // @desc    Create a new patient
 // @route   POST /api/patients
 // @access  Private (Clinic Staff Only)
+
 const createPatient = async (req, res) => {
   try {
     const {
@@ -12,37 +13,61 @@ const createPatient = async (req, res) => {
       emergencyContact, emergencyRelation,
       assignedDoctor, referredBy, communication,
       primaryConcern, painLevel, medicalConditions, notes,
-      attachments
+      attachments,
+      
+      // ⚡️ EXTRACT THE CUSTOM ID (if provided)
+      patientId: customPatientId 
     } = req.body;
 
     if (!fullName || !mobile || !assignedDoctor) {
       return res.status(400).json({ message: 'Name, Mobile, and Doctor are required.' });
     }
 
-    // --- ID GENERATION LOGIC ---
-    // Note: We search the entire CLINIC (all branches) for the last ID.
-    // This ensures PID-1001 is unique across the whole company, avoiding duplicates if branches merge.
-    const lastPatient = await Patient.findOne({ clinicId: req.user.clinicId })
-      .sort({ patientId: -1 })
-      .collation({ locale: "en_US", numericOrdering: true });
+    let finalPatientId;
 
-    let nextId = 1001;
+    // --- ⚡️ ID GENERATION / ASSIGNMENT LOGIC ---
+    if (customPatientId && customPatientId.trim() !== '') {
+      // SCENARIO 1: Clinic provided their own physical ID
+      // First, we must ensure this custom ID doesn't already exist in THIS clinic
+      const existingId = await Patient.findOne({ 
+        clinicId: req.user.clinicId, 
+        patientId: customPatientId.trim() 
+      });
 
-    if (lastPatient && lastPatient.patientId) {
-      const lastIdStr = lastPatient.patientId.replace('PID-', '');
-      const lastIdNum = parseInt(lastIdStr);
-      if (!isNaN(lastIdNum)) {
-        nextId = lastIdNum + 1;
+      if (existingId) {
+        return res.status(400).json({ message: `Patient ID '${customPatientId}' is already in use. Please use a unique ID.` });
       }
-    }
 
-    const patientId = `PID-${nextId}`;
+      finalPatientId = customPatientId.trim();
+
+    } else {
+      // SCENARIO 2: No ID provided. Auto-generate the next sequential ID.
+      // We search the entire CLINIC for the last auto-generated ID (format: PID-XXXX)
+      const lastPatient = await Patient.findOne({ 
+          clinicId: req.user.clinicId,
+          patientId: { $regex: /^PID-\d+$/ } // Only look at our auto-generated format
+        })
+        .sort({ patientId: -1 })
+        .collation({ locale: "en_US", numericOrdering: true });
+
+      let nextId = 1001;
+
+      if (lastPatient && lastPatient.patientId) {
+        const lastIdStr = lastPatient.patientId.replace('PID-', '');
+        const lastIdNum = parseInt(lastIdStr);
+        if (!isNaN(lastIdNum)) {
+          nextId = lastIdNum + 1;
+        }
+      }
+
+      finalPatientId = `PID-${nextId}`;
+    }
 
     // --- CREATE PATIENT ---
     const patient = await Patient.create({
       clinicId: req.user.clinicId,
       branchId: req.branchId, // <--- CRITICAL: Assign to Active Branch
-      patientId,
+      patientId: finalPatientId, // ⚡️ Use the determined ID
       fullName,
       age,
       gender,
