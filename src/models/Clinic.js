@@ -23,7 +23,24 @@ const ClinicSchema = new mongoose.Schema({
 
 	// Branding (We will use this in the Branding Tab later)
 	logo: { type: String },
-	primaryColor: { type: String, default: '#1976d2' }
+	primaryColor: { type: String, default: '#1976d2' },
+
+	whatsappConfig: {
+		whatsappEnabled: { type: Boolean, default: false },
+		twilioAccountSid: { type: String, default: '' },
+		twilioAuthToken: { type: String, default: '' },
+		twilioSenderNumber: { type: String, default: '' },
+
+		// ⚡️ NEW: A dynamic dictionary of all message templates
+		triggers: {
+			type: Map,
+			of: new mongoose.Schema({
+				enabled: { type: Boolean, default: false },
+				template: { type: String, default: '' }
+			}, { _id: false }),
+			default: {}
+		}
+	}
 
 }, { timestamps: true });
 

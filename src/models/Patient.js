@@ -26,6 +26,11 @@ const PatientSchema = new mongoose.Schema(
       type: String,
     },
 
+    dentalChart: {
+      type: Map,
+      of: String, // Will store values like 'decayed', 'missing'
+      default: {}
+    },
     mobile: {
       type: String,
       trim: true,
@@ -111,7 +116,10 @@ const PatientSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
-
+    billed: {
+      type: Boolean,
+      default: false
+    },
     // ===== 6. Attachments =====
     // We store the URL/Path to the file (e.g., from AWS S3 or Uploads folder)
     attachments: {

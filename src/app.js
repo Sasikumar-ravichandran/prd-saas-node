@@ -29,5 +29,6 @@ app.use('/api/prescriptions', require('./routes/prescriptionRoutes'));
 app.use('/api/clinical-notes', require('./routes/clinicalNoteRoutes'));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 app.use('/api/invoices', require('./routes/invoiceRoutes'));
+app.use('/api/settings/whatsapp', require('./routes/whatsappRoutes'));
 
 module.exports = app;

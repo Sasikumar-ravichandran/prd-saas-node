@@ -290,28 +290,28 @@ const getReceptionStats = async (req, res) => {
 const getAdminStats = async (req, res) => {
     try {
         const clinicId = req.user.clinicId;
-        const branchId = req.branchId; // <--- 1. Get Active Branch
+        const branchId = req.branchId;
 
         const now = new Date();
 
-        // 1. Time Ranges
+        // 1. Time Ranges for Financials (Monthly/Daily)
         const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
         const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
         const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
 
-        // 2. REVENUE (Money In) - Current Month [Scoped to Branch]
+        // 2. REVENUE (Money In) - Current Month 
         const currentMonthPayments = await Payment.find({
             clinicId,
-            branchId, // <--- FILTER
+            branchId,
             createdAt: { $gte: startOfMonth }
         });
         const revenueMonth = currentMonthPayments.reduce((acc, p) => acc + p.amount, 0);
 
-        // 3. EXPENSES (Money Out) - Current Month [Scoped to Branch]
+        // 3. EXPENSES (Money Out) - Current Month 
         const currentMonthExpenses = await Expense.find({
             clinicId,
-            branchId, // <--- FILTER
+            branchId,
             date: { $gte: startOfMonth }
         });
         const expenseMonth = currentMonthExpenses.reduce((acc, e) => acc + e.amount, 0);
@@ -321,7 +321,7 @@ const getAdminStats = async (req, res) => {
 
         const lastMonthPayments = await Payment.find({
             clinicId,
-            branchId, // <--- FILTER
+            branchId,
             createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth }
         });
         const revenueLastMonth = lastMonthPayments.reduce((acc, p) => acc + p.amount, 0);
@@ -330,12 +330,12 @@ const getAdminStats = async (req, res) => {
         if (revenueLastMonth > 0) growthPercent = ((revenueMonth - revenueLastMonth) / revenueLastMonth) * 100;
         else if (revenueMonth > 0) growthPercent = 100;
 
-        // 5. EXPENSE BREAKDOWN (Aggregate by Category) [Scoped to Branch]
+        // 5. EXPENSE BREAKDOWN (Aggregate by Category) 
         const expenseBreakdown = await Expense.aggregate([
             {
                 $match: {
                     clinicId: new mongoose.Types.ObjectId(req.user.clinicId),
-                    branchId: new mongoose.Types.ObjectId(branchId), // <--- FILTER
+                    branchId: new mongoose.Types.ObjectId(branchId),
                     date: { $gte: startOfMonth }
                 }
             },
@@ -343,31 +343,31 @@ const getAdminStats = async (req, res) => {
             { $sort: { total: -1 } }
         ]);
 
-        // 6. PATIENT METRICS [Scoped to Branch]
+        // 6. PATIENT METRICS 
         const totalPatients = await Patient.countDocuments({
             clinicId,
-            branchId, // <--- FILTER
+            branchId,
             isActive: true
         });
         const newPatientsMonth = await Patient.countDocuments({
             clinicId,
-            branchId, // <--- FILTER
+            branchId,
             createdAt: { $gte: startOfMonth }
         });
 
-        // 7. TODAY'S REVENUE [Scoped to Branch]
+        // 7. TODAY'S REVENUE 
         const todaysPayments = await Payment.find({
             clinicId,
-            branchId, // <--- FILTER
+            branchId,
             createdAt: { $gte: startOfDay }
         });
         const revenueToday = todaysPayments.reduce((acc, p) => acc + p.amount, 0);
 
-        // 8. MIXED TRANSACTIONS STREAM (Payments + Expenses) [Scoped to Branch]
-        const recentPayments = await Payment.find({ clinicId, branchId }) // <--- FILTER
+        // 8. MIXED TRANSACTIONS STREAM (Payments + Expenses) 
+        const recentPayments = await Payment.find({ clinicId, branchId })
             .sort({ createdAt: -1 }).limit(10).populate('patientId', 'fullName').lean();
 
-        const recentExpenses = await Expense.find({ clinicId, branchId }) // <--- FILTER
+        const recentExpenses = await Expense.find({ clinicId, branchId })
             .sort({ date: -1 }).limit(10).lean();
 
         let mixedTransactions = [
@@ -391,23 +391,40 @@ const getAdminStats = async (req, res) => {
             }))
         ];
 
-        // Sort combined list by date (newest first) and take true top 10
         mixedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
         mixedTransactions = mixedTransactions.slice(0, 10);
 
-        // 9. DOCTOR PERFORMANCE [Scoped to Branch]
-        const performanceStats = await Appointment.aggregate([
-            {
-                $match: {
-                    clinicId: new mongoose.Types.ObjectId(req.user.clinicId),
-                    branchId: new mongoose.Types.ObjectId(branchId), // <--- FILTER
-                    status: 'Completed',
-                    start: { $gte: startOfMonth }
-                }
-            },
-            { $group: { _id: "$doctorName", count: { $sum: 1 } } },
-            { $sort: { count: -1 } }
-        ]);
+        // ⚡️ 9. TARGET APPOINTMENTS [Scoped to Branch & Requested Date]
+        const queryDate = req.query.date ? new Date(req.query.date) : new Date();
+        const startOfTargetDay = new Date(queryDate); startOfTargetDay.setHours(0, 0, 0, 0);
+        const endOfTargetDay = new Date(queryDate); endOfTargetDay.setHours(23, 59, 59, 999);
+
+        const targetAppointments = await Appointment.find({
+            clinicId,
+            branchId,
+            start: { $gte: startOfTargetDay, $lte: endOfTargetDay }
+        })
+            .populate('patientId', 'fullName patientId')
+            .populate('doctorId', 'name fullName')
+            .sort({ start: 1 })
+            .lean();
+
+        const formattedAppointments = targetAppointments.map(appt => {
+            const patientMongoId = appt.patientId?._id?.toString() || '';
+
+            // Grab your custom 'PID-001', or generate a fallback that matches your exact style ('PID-A2B3')
+            const displayId = appt.patientId?.patientId;
+
+            return {
+                patientMongoId: patientMongoId,
+                patientDisplayId: displayId,
+                patientName: appt.patientId?.fullName || appt.title || 'Walk-in',
+                doctorName: appt.doctorName || appt.doctorId?.fullName || appt.doctorId?.name || 'Unassigned',
+                start: appt.start,
+                status: appt.status || 'Scheduled',
+                type: appt.type || 'Consultation'
+            };
+        });
 
         res.json({
             financials: {
@@ -424,7 +441,8 @@ const getAdminStats = async (req, res) => {
                 newThisMonth: newPatientsMonth
             },
             transactions: mixedTransactions,
-            performance: performanceStats
+            // ⚡️ Removed `performance` and returned appointments
+            appointments: formattedAppointments
         });
 
     } catch (error) {

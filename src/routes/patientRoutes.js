@@ -12,7 +12,8 @@ const {
   updatePatient,
   uploadAttachment,
   deleteAttachment,
-  bulkCompleteTreatments
+  bulkCompleteTreatments,
+  updateToothCondition
 } = require('../controllers/patientController');
 const { protect } = require('../middleware/authMiddleware');
 const upload = require('../middleware/uploadMiddleware');
@@ -34,4 +35,6 @@ router.route('/:id/treatments/:itemId')
 router.post('/:id/upload', upload.single('file'), uploadAttachment);
 router.delete('/:id/files', deleteAttachment);
 router.put('/:id/treatments/bulk-complete', bulkCompleteTreatments);
+router.put('/:id/tooth', updateToothCondition);
+
 module.exports = router;

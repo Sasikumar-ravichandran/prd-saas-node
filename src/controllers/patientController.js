@@ -2,6 +2,8 @@ const Patient = require('../models/Patient');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
+const Appointment = require('../models/Appointment');
+const Invoice = require('../models/Invoice');
 // @desc    Create a new patient
 // @route   POST /api/patients
 // @access  Private (Clinic Staff Only)
@@ -231,10 +233,25 @@ const getPatientById = async (req, res) => {
       return res.status(400).json({ message: 'Invalid Patient ID format' });
     }
 
-    // Only returns if Matches Clinic AND Branch
-    const patient = await Patient.findOne(query);
+    // ⚡️ FIXED: Added .lean() so we can attach new data to the Mongoose object
+    const patient = await Patient.findOne(query).lean();
 
     if (patient) {
+      // ⚡️ FIXED: Fetch all appointments for this specific patient
+      const appointments = await Appointment.find({ 
+        clinicId: req.user.clinicId,
+        patientId: patient._id 
+      }).sort({ start: 1 }).lean();
+
+      const invoices = await Invoice.find({ 
+          clinicId: req.user.clinicId, 
+          patientId: patient._id 
+      }).sort({ createdAt: -1 }).lean();
+
+      // Attach the appointments array to the patient object
+      patient.appointments = appointments;
+      patient.invoices = invoices;
+
       res.json(patient);
     } else {
       res.status(404).json({ message: 'Patient not found in this branch' });
@@ -242,6 +259,50 @@ const getPatientById = async (req, res) => {
 
   } catch (error) {
     console.error("Error fetching patient details:", error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+};
+
+// @desc    Update a specific tooth's condition (Missing, Decayed, Clear)
+const updateToothCondition = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { tooth, condition } = req.body;
+
+    // ⚡️ FIXED: Smart Query to handle both 'PID-1001' and Mongo ObjectIds
+    let query = {
+      clinicId: req.user.clinicId,
+      branchId: req.branchId
+    };
+
+    if (id.startsWith('PID-')) {
+      query.patientId = id; // Search your custom string field
+    } else {
+      query._id = id;       // Search the Mongo ObjectId field
+    }
+
+    const patient = await Patient.findOne(query);
+
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
+
+    // If 'clear' or 'healthy', remove it from the map. Otherwise, set it.
+    if (!condition || condition === 'healthy' || condition === 'clear') {
+      patient.dentalChart.delete(tooth.toString());
+    } else {
+      patient.dentalChart.set(tooth.toString(), condition);
+    }
+
+    await patient.save();
+    
+    // We must populate appointments before returning so the frontend doesn't break
+    const Appointment = require('../models/Appointment');
+    const appointments = await Appointment.find({ patientId: patient._id }).lean();
+    const patientObj = patient.toObject();
+    patientObj.appointments = appointments;
+
+    res.json(patientObj);
+  } catch (error) {
+    console.error("Tooth Update Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
@@ -604,5 +665,6 @@ module.exports = {
   updatePatient,
   uploadAttachment,
   deleteAttachment,
-  bulkCompleteTreatments
+  bulkCompleteTreatments,
+  updateToothCondition
 };
