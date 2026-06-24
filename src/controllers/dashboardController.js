@@ -160,6 +160,7 @@ const getDoctorStats = async (req, res) => {
 };
 
 // @desc    Get Receptionist Dashboard Data (Scoped to Branch)
+// @desc    Get Receptionist Dashboard Data (Scoped to Branch)
 const getReceptionStats = async (req, res) => {
     try {
         const clinicId = req.user.clinicId;
@@ -170,17 +171,17 @@ const getReceptionStats = async (req, res) => {
         const now = new Date();
 
         // --- 1. DOCTOR STATUS (TRAFFIC LIGHTS) ---
-        // Only show doctors assigned to THIS branch
+        // ⚡️ FIX 1: Add 'fullName' to the .select() statement!
         const doctors = await User.find({
             clinicId,
             role: { $in: ['Doctor', 'doctor'] },
-            allowedBranches: branchId // <--- 2. FILTER DOCTORS
-        }).select('name _id');
+            allowedBranches: branchId
+        }).select('name fullName _id');
 
         // Check Calendar (Appointments in THIS branch)
         const activeAppointments = await Appointment.find({
             clinicId,
-            branchId, // <--- 3. FILTER APPOINTMENTS
+            branchId,
             start: { $lte: now },
             end: { $gte: now },
             status: 'In Progress'
@@ -189,15 +190,20 @@ const getReceptionStats = async (req, res) => {
         // Check Clinical Charts (Patients active in THIS branch)
         const activePatients = await Patient.find({
             clinicId,
-            branchId, // <--- 4. FILTER PATIENTS
+            branchId,
             'treatmentPlan.status': 'In Progress',
             updatedAt: { $gte: startOfDay }
         }).select('fullName assignedDoctor treatmentPlan');
 
         const doctorStatus = doctors.map(doc => {
-            const activeAppt = activeAppointments.find(a => a.doctorId.toString() === doc._id.toString());
+            // ⚡️ FIX 2: Safely grab the doctor's name, prioritizing fullName
+            const docName = doc.fullName || doc.name || 'Unknown Doctor';
+
+            const activeAppt = activeAppointments.find(a => a.doctorId && a.doctorId.toString() === doc._id.toString());
+
+            // ⚡️ FIX 3: Check if assignedDoctor matches either fullName or name
             const clinicalPatient = activePatients.find(p =>
-                p.assignedDoctor === doc.name &&
+                (p.assignedDoctor === doc.fullName || p.assignedDoctor === doc.name) &&
                 p.treatmentPlan.some(t => t.status === 'In Progress')
             );
 
@@ -215,17 +221,18 @@ const getReceptionStats = async (req, res) => {
                 timer = 'Chart';
             }
 
-            return { id: doc._id, doctor: doc.name, status, patient: patientName, timer };
+            // ⚡️ FIX 4: Pass the correct 'docName' to the frontend
+            return { id: doc._id, doctor: docName, status, patient: patientName, timer };
         });
 
         // --- 2. TODAY'S FLOW (Queue for THIS Branch) ---
         const appointmentsToday = await Appointment.find({
             clinicId,
-            branchId, // <--- 5. FILTER QUEUE
+            branchId,
             start: { $gte: startOfDay, $lte: endOfDay }
         })
             .populate('patientId', 'fullName patientId totalCost totalPaid')
-            .populate('doctorId', 'name')
+            .populate('doctorId', 'name fullName')
             .sort({ start: 1 });
 
         const todayFlow = await Promise.all(appointmentsToday.map(async (appt) => {
@@ -234,7 +241,7 @@ const getReceptionStats = async (req, res) => {
             if (!patient && appt.title) {
                 const foundPatient = await Patient.findOne({
                     clinicId,
-                    branchId, // <--- 6. FILTER SMART SEARCH
+                    branchId,
                     fullName: new RegExp(`^${appt.title.trim()}$`, 'i')
                 });
                 if (foundPatient) patient = foundPatient;
@@ -257,7 +264,8 @@ const getReceptionStats = async (req, res) => {
                 name: patient.fullName || appt.title || 'Walk-in',
                 displayId: patient.patientId || '',
                 mongoId: patient._id || null,
-                doc: appt.doctorId?.name || 'Unassigned',
+                // ⚡️ FIX 5: Fallback for doctor name in the flow table too
+                doc: appt.doctorId?.fullName || appt.doctorId?.name || 'Unassigned',
                 status: appt.status || 'Scheduled',
                 payStatus: payStatus,
                 dueAmount: due
@@ -267,14 +275,23 @@ const getReceptionStats = async (req, res) => {
         // --- 3. CASH DRAWER (Money collected in THIS Branch) ---
         const todaysPayments = await Payment.find({
             clinicId,
-            branchId, // <--- 7. FILTER CASH DRAWER
+            branchId,
             createdAt: { $gte: startOfDay, $lte: endOfDay }
+        });
+
+        // ⚡️ NEW: Fetch Today's Expenses for this branch
+        const todaysExpenses = await Expense.find({
+            clinicId,
+            branchId,
+            date: { $gte: startOfDay, $lte: endOfDay }
         });
 
         const cashDrawer = {
             total: todaysPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
             cash: todaysPayments.filter(p => p.method === 'Cash').reduce((sum, p) => sum + (p.amount || 0), 0),
             online: todaysPayments.filter(p => ['UPI', 'GPay', 'Card', 'NetBanking'].includes(p.method)).reduce((sum, p) => sum + (p.amount || 0), 0),
+            // NEW: Calculate total expenses for the UI
+            expenses: todaysExpenses.reduce((sum, e) => sum + (e.amount || 0), 0)
         };
 
         res.json({ doctorStatus, todayFlow, cashDrawer, recallList: [] });
@@ -368,7 +385,10 @@ const getAdminStats = async (req, res) => {
             .sort({ createdAt: -1 }).limit(10).populate('patientId', 'fullName').lean();
 
         const recentExpenses = await Expense.find({ clinicId, branchId })
-            .sort({ date: -1 }).limit(10).lean();
+            .sort({ date: -1 })
+            .limit(10)
+            .populate('loggedBy', 'fullName name') // ⚡️ NEW: Fetch the user who logged it
+            .lean();
 
         let mixedTransactions = [
             ...recentPayments.map(t => ({
@@ -380,15 +400,20 @@ const getAdminStats = async (req, res) => {
                 category: 'Patient Payment',
                 type: 'Income'
             })),
-            ...recentExpenses.map(e => ({
-                id: 'EXP',
-                details: e.vendor || e.title,
-                amount: e.amount,
-                method: e.paymentMethod,
-                date: e.date,
-                category: e.category,
-                type: 'Expense'
-            }))
+            ...recentExpenses.map(e => {
+                // ⚡️ NEW: Extract staff name securely
+                const staffName = e.loggedBy?.fullName || e.loggedBy?.name || 'Staff';
+                return {
+                    id: 'EXP',
+                    // ⚡️ NEW: Append the staff name to the transaction details
+                    details: `${e.vendor || e.title || 'Expense'} (By: ${staffName})`, 
+                    amount: e.amount,
+                    method: e.paymentMethod,
+                    date: e.date,
+                    category: e.category,
+                    type: 'Expense'
+                };
+            })
         ];
 
         mixedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -441,7 +466,6 @@ const getAdminStats = async (req, res) => {
                 newThisMonth: newPatientsMonth
             },
             transactions: mixedTransactions,
-            // ⚡️ Removed `performance` and returned appointments
             appointments: formattedAppointments
         });
 

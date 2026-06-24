@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 
 // Generate JWT
 const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'secret123', { expiresIn: '30d' });
+  return jwt.sign({ id }, process.env.JWT_SECRET || 'secret123azb', { expiresIn: '30d' });
 };
 
 // @desc    Register New Clinic (Admin Sign Up)
@@ -43,7 +43,7 @@ const registerClinic = async (req, res) => {
       password,
       role: 'Administrator',
 
-      // ⚡️ KEY: Set this to null so the frontend knows to redirect!
+      // KEY: Set this to null so the frontend knows to redirect!
       defaultBranch: null,
       allowedBranches: [],
 
@@ -70,7 +70,7 @@ const registerClinic = async (req, res) => {
       clinicId: clinic._id,
       token: generateToken(user._id),
 
-      // ⚡️ Return null so frontend redirects to /setup-branch
+      // Return null so frontend redirects to /setup-branch
       defaultBranch: null
     });
 

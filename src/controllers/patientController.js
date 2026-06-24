@@ -8,6 +8,36 @@ const Invoice = require('../models/Invoice');
 // @route   POST /api/patients
 // @access  Private (Clinic Staff Only)
 
+const scanIntakeForm = async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: "No image file provided." });
+
+        // 1. Fetch the clinic's settings from the DB
+        // Assuming you have a Clinic model imported
+        const clinic = await Clinic.findOne({ clinicId: req.user.clinicId });
+        
+        const apiKey = clinic?.aiConfig?.geminiApiKey;
+
+        if (!apiKey) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "API_KEY_MISSING" // Frontend will catch this specific message
+            });
+        }
+
+        // 2. Pass the key to the scanner
+        const extractedData = await extractFormData(req.file.buffer, req.file.mimetype, apiKey);
+
+        res.status(200).json({ success: true, data: extractedData });
+
+    } catch (error) {
+        if (error.status === 429) {
+             return res.status(429).json({ message: "LIMIT_REACHED" });
+        }
+        res.status(500).json({ message: "Failed to read form." });
+    }
+};
+
 const createPatient = async (req, res) => {
   try {
     const {

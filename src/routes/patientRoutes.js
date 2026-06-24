@@ -16,6 +16,7 @@ const {
   updateToothCondition
 } = require('../controllers/patientController');
 const { protect } = require('../middleware/authMiddleware');
+const { scanIntakeForm } = require('../controllers/ocrController')
 const upload = require('../middleware/uploadMiddleware');
 
 // Apply protection to all routes in this file
@@ -36,5 +37,7 @@ router.post('/:id/upload', upload.single('file'), uploadAttachment);
 router.delete('/:id/files', deleteAttachment);
 router.put('/:id/treatments/bulk-complete', bulkCompleteTreatments);
 router.put('/:id/tooth', updateToothCondition);
+// routes/patientRoutes.js
+router.post('/scan', protect, upload.single('formImage'), scanIntakeForm);
 
 module.exports = router;

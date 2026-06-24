@@ -2,6 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const app = express();
+const cron = require('node-cron');
+const { runRetentionEngine } = require('./controllers/recallController');
 
 // --- Middleware ---
 app.use(cors()); // Allows React to talk to Node
@@ -30,5 +32,18 @@ app.use('/api/clinical-notes', require('./routes/clinicalNoteRoutes'));
 app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 app.use('/api/invoices', require('./routes/invoiceRoutes'));
 app.use('/api/settings/whatsapp', require('./routes/whatsappRoutes'));
+app.use('/api/payroll', require('./routes/payrollRoutes'));
+
+cron.schedule('30 9 * * *', () => {
+  console.log('[Cron] Triggering daily retention engine...');
+  runRetentionEngine();
+}, {
+  scheduled: true,
+  timezone: "Asia/Kolkata"
+});
+
+// cron.schedule('* * * * *', () => {
+//   runRetentionEngine();
+// });
 
 module.exports = app;

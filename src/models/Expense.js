@@ -3,10 +3,9 @@ const mongoose = require('mongoose');
 const ExpenseSchema = new mongoose.Schema({
   clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', required: true },
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
-  title: { type: String, required: true }, // e.g., "Lab Fees - Zirconia"
   category: { 
     type: String, 
-    enum: ['Salaries', 'Rent', 'Lab Fees', 'Inventory', 'Utilities', 'Maintenance', 'Marketing', 'Other'],
+    enum: ['Office Supplies', 'Rent', 'Utilities', 'Salaries', 'Marketing', 'Dental Materials', 'Maintenance', 'Other'],
     required: true 
   },
   amount: { type: Number, required: true },

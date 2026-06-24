@@ -43,6 +43,7 @@ const createUser = async (req, res) => {
         // 2. Create User
         const user = await User.create({
             clinicId: req.user.clinicId,
+            name: fullName || name,
             fullName: fullName || name,
             email,
             role,
@@ -82,6 +83,7 @@ const updateUser = async (req, res) => {
 
         // 1. Update Basic Fields
         if (req.body.fullName || req.body.name) user.fullName = req.body.fullName || req.body.name;
+        user.name = req.body.name || req.body.fullName || user.name;
         if (req.body.email) user.email = req.body.email;
         if (req.body.mobile) user.mobile = req.body.mobile;
         if (req.body.role) user.role = req.body.role;
@@ -94,7 +96,8 @@ const updateUser = async (req, res) => {
 
         // 3. Update Branch
         if (req.body.defaultBranch) user.defaultBranch = req.body.defaultBranch;
-
+        if (req.body.baseSalary !== undefined) user.baseSalary = req.body.baseSalary;
+        if (req.body.commissionRate !== undefined) user.commissionRate = req.body.commissionRate;
         // 4. Save
         const updatedUser = await user.save();
 
@@ -155,7 +158,7 @@ const updateMe = async (req, res) => {
         if (req.body.fullName || req.body.name) {
             user.fullName = req.body.fullName || req.body.name;
         }
-        
+
         if (req.body.mobile !== undefined || req.body.phone !== undefined) {
             user.mobile = req.body.mobile || req.body.phone;
         }

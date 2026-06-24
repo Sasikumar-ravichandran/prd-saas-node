@@ -22,8 +22,8 @@ const UserSchema = new mongoose.Schema({
     },
 
     // 2. Identity
-    // Changed 'name' to 'fullName' to match Patient/Procedure style (optional but cleaner)
-    fullName: { type: String, required: true, trim: true },
+    name: { type: String, required: true, trim: true }, // Used widely in your app
+    fullName: { type: String, trim: true }, // Kept for your compatibility
 
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true },
@@ -44,15 +44,14 @@ const UserSchema = new mongoose.Schema({
     },
     mustChangePassword: { type: Boolean, default: false },
 
-    // ⚡️⚡️ 4. NEW: Doctor Configuration (The Financial Engine) ⚡️⚡️
-    // This is ignored for Receptionists/Admins, but critical for Doctors.
-    doctorConfig: {
-        specialization: { type: String, default: 'General Dentist' }, // e.g., Orthodontist
-        registrationNumber: { type: String }, // Medical License #
+    // ⚡️⚡️ 4. UNIVERSAL COMPENSATION (Applies to everyone) ⚡️⚡️
+    baseSalary: { type: Number, default: 0 }, 
+    commissionRate: { type: Number, default: 0, min: 0, max: 100 }, 
 
-        // FINANCIALS
-        commissionPercentage: { type: Number, default: 0, min: 0, max: 100 }, // The % share
-        baseSalary: { type: Number, default: 0 } // Fixed monthly pay (optional)
+    // 5. DOCTOR CLINICAL CONFIG (Only used if role is Doctor)
+    doctorConfig: {
+        specialization: { type: String, default: 'General Dentist' }, 
+        registrationNumber: { type: String } 
     }
 
 }, { timestamps: true });
@@ -60,18 +59,13 @@ const UserSchema = new mongoose.Schema({
 // --- MIDDLEWARE ---
 
 // Encrypt password before saving
-UserSchema.pre('save', async function () { // 1. Remove 'next' parameter here
-
-    // 2. If password isn't modified, just return (Promise resolves automatically)
+UserSchema.pre('save', async function () { 
     if (!this.isModified('password')) {
         return;
     }
 
-    // 3. Hash the password
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
-
-    // 4. No need to call next()
 });
 
 // Helper to compare password

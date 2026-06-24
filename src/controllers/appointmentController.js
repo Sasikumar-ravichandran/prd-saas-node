@@ -1,13 +1,21 @@
 const Appointment = require('../models/Appointment');
+const { dispatchWhatsAppEvent } = require('../services/whatsappService');
+
+const formatApptTime = (dateString) => {
+  if (!dateString) return '';
+  return new Date(dateString).toLocaleString('en-IN', {
+    weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+  });
+};
 
 // @desc    Get all appointments (Scoped to Active Branch)
 // @route   GET /api/appointments
 const getAppointments = async (req, res) => {
   try {
     // SECURITY: Only fetch appointments for this clinic AND this branch
-    const appointments = await Appointment.find({ 
-        clinicId: req.user.clinicId,
-        branchId: req.branchId // <--- FILTER BY BRANCH
+    const appointments = await Appointment.find({
+      clinicId: req.user.clinicId,
+      branchId: req.branchId // <--- FILTER BY BRANCH
     });
     res.json(appointments);
   } catch (error) {
@@ -20,8 +28,8 @@ const getAppointments = async (req, res) => {
 // @route   POST /api/appointments
 const createAppointment = async (req, res) => {
   try {
-    const { 
-      title, patientId, phone, docId, doc, type, start, end, resourceId, status 
+    const {
+      title, patientId, phone, docId, doc, type, start, end, resourceId, status
     } = req.body;
 
     // Basic Validation
@@ -30,7 +38,7 @@ const createAppointment = async (req, res) => {
     }
 
     const appointment = await Appointment.create({
-      clinicId: req.user.clinicId, 
+      clinicId: req.user.clinicId,
       branchId: req.branchId, // <--- BIND TO ACTIVE BRANCH
       patientId,
       title,
@@ -43,7 +51,15 @@ const createAppointment = async (req, res) => {
       resourceId,
       status: status || 'Scheduled'
     });
-
+    if (phone) {
+      dispatchWhatsAppEvent(req.user.clinicId, 'appointment_booked', phone, {
+        patientName: title.split('-')[0].trim() || 'Patient', // Assuming title has patient name
+        time: formatApptTime(start),
+        treatment: type || 'Consultation',
+        doctorName: doc || 'your doctor',
+        clinicName: "Our Clinic" // Replace with req.user.clinicName if available in your auth payload
+      });
+    }
     res.status(201).json(appointment);
 
   } catch (error) {
@@ -61,10 +77,10 @@ const updateAppointment = async (req, res) => {
 
     // 1. Find Appointment (Ensure it belongs to this clinic AND branch)
     // This prevents a user from editing an appointment ID that belongs to another branch
-    let appointment = await Appointment.findOne({ 
-        _id: id, 
-        clinicId: req.user.clinicId,
-        branchId: req.branchId // <--- SECURITY CHECK
+    let appointment = await Appointment.findOne({
+      _id: id,
+      clinicId: req.user.clinicId,
+      branchId: req.branchId // <--- SECURITY CHECK
     });
 
     if (!appointment) {
@@ -81,6 +97,14 @@ const updateAppointment = async (req, res) => {
     if (status) appointment.status = status;
 
     await appointment.save();
+    if (isRescheduled && appointment.phone) {
+      dispatchWhatsAppEvent(req.user.clinicId, 'appointment_rescheduled', appointment.phone, {
+        patientName: appointment.title.split('-')[0].trim(),
+        time: formatApptTime(appointment.start),
+        doctorName: appointment.doctorName,
+        clinicName: "Our Clinic"
+      });
+    }
     res.json(appointment);
 
   } catch (error) {
@@ -94,16 +118,23 @@ const updateAppointment = async (req, res) => {
 const deleteAppointment = async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // SECURITY: Ensure we only delete from the active branch
-    const appointment = await Appointment.findOneAndDelete({ 
-        _id: id, 
-        clinicId: req.user.clinicId,
-        branchId: req.branchId // <--- SECURITY CHECK
+    const appointment = await Appointment.findOneAndDelete({
+      _id: id,
+      clinicId: req.user.clinicId,
+      branchId: req.branchId // <--- SECURITY CHECK
     });
 
     if (!appointment) {
       return res.status(404).json({ message: 'Appointment not found or access denied' });
+    }
+    if (appointment.phone) {
+      dispatchWhatsAppEvent(req.user.clinicId, 'appointment_cancelled', appointment.phone, {
+        patientName: appointment.title.split('-')[0].trim(),
+        time: formatApptTime(appointment.start),
+        clinicName: "Our Clinic"
+      });
     }
 
     res.json({ message: 'Appointment removed' });
@@ -114,26 +145,42 @@ const deleteAppointment = async (req, res) => {
 };
 
 const updateAppointmentStatus = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { status } = req.body; // Expects 'In Progress', 'Completed', or 'Cancelled'
+  try {
+    const { id } = req.params;
+    const { status } = req.body; // Expects 'In Progress', 'Completed', or 'Cancelled'
 
-        // Find the appointment and update ONLY the status
-        const appointment = await Appointment.findByIdAndUpdate(
-            id, 
-            { status: status },
-            { new: true } // Returns the updated document
-        );
+    // Find the appointment and update ONLY the status
+    const appointment = await Appointment.findByIdAndUpdate(
+      id,
+      { status: status },
+      { new: true } // Returns the updated document
+    );
 
-        if (!appointment) {
-            return res.status(404).json({ message: 'Appointment not found' });
-        }
-
-        res.json(appointment);
-    } catch (error) {
-        console.error("Update Status Error:", error);
-        res.status(500).json({ message: 'Server Error' });
+    if (!appointment) {
+      return res.status(404).json({ message: 'Appointment not found' });
     }
+
+    if (appointment.phone) {
+      if (status === 'Cancelled') {
+        dispatchWhatsAppEvent(req.user.clinicId, 'appointment_cancelled', appointment.phone, {
+          patientName: appointment.title.split('-')[0].trim(),
+          time: formatApptTime(appointment.start),
+          clinicName: "Our Clinic"
+        });
+      } else if (status === 'Completed') {
+        dispatchWhatsAppEvent(req.user.clinicId, 'appointment_completed', appointment.phone, {
+          patientName: appointment.title.split('-')[0].trim(),
+          treatment: appointment.type,
+          clinicName: "Our Clinic"
+        });
+      }
+    }
+
+    res.json(appointment);
+  } catch (error) {
+    console.error("Update Status Error:", error);
+    res.status(500).json({ message: 'Server Error' });
+  }
 };
 
 module.exports = {

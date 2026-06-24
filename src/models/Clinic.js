@@ -40,6 +40,16 @@ const ClinicSchema = new mongoose.Schema({
 			}, { _id: false }),
 			default: {}
 		}
+	},
+	aiConfig: {
+		enabled: {
+			type: Boolean, 
+			default: false 
+		},
+		geminiApiKey: {
+			type: String,
+			default: ""
+		}
 	}
 
 }, { timestamps: true });
