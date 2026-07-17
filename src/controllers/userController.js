@@ -3,22 +3,49 @@ const User = require('../models/User');
 // @desc    Get all users
 const getUsers = async (req, res) => {
     try {
-        // 1. Base query: always filter by clinicId
+        // 1. Capture Query Parameters (Added Pagination)
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const search = req.query.search || '';
+
+        // 2. Base query: always filter by clinicId
         let query = { clinicId: req.user.clinicId };
 
-        // ⚡️ 2. If the frontend asks for a specific role (e.g., ?role=Doctor), add it!
+        // 3. Role Filter
         if (req.query.role) {
-            // Using a regex makes it case-insensitive (handles 'doctor' or 'Doctor')
             query.role = { $regex: new RegExp(`^${req.query.role}$`, 'i') };
         }
 
-        // 3. Run the query with your existing populate and sort logic
+        // 4. Search Filter
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { email: { $regex: search, $options: 'i' } },
+                { role: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // 5. Execute Paginated Query
+        const skip = (page - 1) * limit;
+
         const users = await User.find(query)
             .select('-password')
-            .populate('defaultBranch', 'branchName name branchCode') // Get Branch Name
-            .sort({ createdAt: -1 });
+            .populate('defaultBranch', 'branchName name branchCode')
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
 
-        res.json(users);
+        // 6. Get Total Count for the Frontend Pagination UI
+        const total = await User.countDocuments(query);
+
+        // ⚡️ Return the data structured exactly like your getPatients response
+        res.json({
+            users,
+            totalPages: Math.ceil(total / limit),
+            currentPage: page,
+            totalCount: total
+        });
+
     } catch (error) {
         console.error("Error fetching users:", error);
         res.status(500).json({ message: 'Server Error' });

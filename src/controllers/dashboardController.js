@@ -387,7 +387,7 @@ const getAdminStats = async (req, res) => {
         const recentExpenses = await Expense.find({ clinicId, branchId })
             .sort({ date: -1 })
             .limit(10)
-            .populate('loggedBy', 'fullName name') // ⚡️ NEW: Fetch the user who logged it
+            .populate('recordedBy', 'fullName name') // NEW: Fetch the user who logged it
             .lean();
 
         let mixedTransactions = [
@@ -402,7 +402,7 @@ const getAdminStats = async (req, res) => {
             })),
             ...recentExpenses.map(e => {
                 // ⚡️ NEW: Extract staff name securely
-                const staffName = e.loggedBy?.fullName || e.loggedBy?.name || 'Staff';
+                const staffName = e.recordedBy?.fullName || e.recordedBy?.name || 'Staff';
                 return {
                     id: 'EXP',
                     // ⚡️ NEW: Append the staff name to the transaction details

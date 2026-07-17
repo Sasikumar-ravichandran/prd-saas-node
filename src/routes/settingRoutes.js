@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getRoleConfig, updateRoleConfig } = require('../controllers/roleController');
+const { getRoles, updateRole } = require('../controllers/roleController');
 const { getClinicProfile, updateClinicProfile } = require('../controllers/clinicController');
 const { protect, adminOnly } = require('../middleware/authMiddleware');
 
@@ -21,10 +21,10 @@ router.put('/clinic', protect, updateClinicProfile);
 
 // GET: Any staff (or just admin) can view roles
 // (Must have 'protect' so req.user exists!)
-router.get('/roles', protect, getRoleConfig);
+router.get('/roles', protect, getRoles);
 
 // PUT: Only Admins can change permissions
 // (You previously had 'updateClinicProfile' here by mistake)
-router.put('/roles', protect, updateRoleConfig);
+router.put('/roles', protect, updateRole);
 
 module.exports = router;

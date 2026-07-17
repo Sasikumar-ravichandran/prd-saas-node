@@ -1,73 +1,59 @@
-const RoleConfig = require('../models/RoleConfig');
+const RoleConfig = require('../models/roleConfig');
 
-const DEFAULT_PERMISSIONS = {
-  admin: ['fin_view_revenue', 'fin_edit_invoice', 'fin_discounts', 'pt_delete', 'pt_export', 'ops_settings', 'ops_calendar'],
-  doctor: ['fin_view_revenue', 'ops_calendar'],
-  receptionist: ['ops_calendar', 'fin_edit_invoice'],
-  nurse: []
-};
-
-// @desc    Get permissions map
-const getRoleConfig = async (req, res) => {
+// 1. GET ALL ROLES FOR A CLINIC
+const getRoles = async (req, res) => {
   try {
-  
-    if (!req.user?.clinicId) {
-        console.error("User has no Clinic ID linked.");
-        // Return default permissions temporarily so frontend doesn't break
-        return res.json(DEFAULT_PERMISSIONS);
+    // 1. Fetch from DB
+    const roles = await RoleConfig.find({ clinicId: req.user.clinicId });
+
+    // 2. Start with a guaranteed structure
+    const formattedRoles = {
+      admin: [],
+      doctor: [],
+      receptionist: []
+    };
+
+    // 3. Populate only if 'roles' is not empty
+    if (roles && roles.length > 0) {
+      roles.forEach(role => {
+        // Only assign if the roleId exists in our predefined list
+        if (role.roleId && formattedRoles.hasOwnProperty(role.roleId)) {
+          formattedRoles[role.roleId] = role.permissions || [];
+        }
+      });
     }
 
-    //  Find Config
-    let config = await RoleConfig.findOne({ clinicId: req.user.clinicId });
-
-    if (!config) {
-      try {
-        config = await RoleConfig.create({
-          clinicId: req.user.clinicId,
-          permissions: DEFAULT_PERMISSIONS
-        });
-      } catch (createErr) {
-        // Fallback: Send defaults even if DB save failed
-        return res.json(DEFAULT_PERMISSIONS);
-      }
-    }
-
-    res.json(config.permissions);
+    // 4. Return the object
+    res.json(formattedRoles);
 
   } catch (error) {
-    res.status(500).json({ message: 'Server Error' });
+    // 5. Log the actual error so we know why it failed
+    console.error("CRITICAL GET_ROLES ERROR:", error);
+    res.status(500).json({ message: 'Failed to fetch roles', error: error.message });
   }
 };
 
-// @desc    Update permissions
-const updateRoleConfig = async (req, res) => {
+// 2. UPDATE A SPECIFIC ROLE
+const updateRole = async (req, res) => {
   try {
-    const { roleId, permissions } = req.body; 
+    const { roleId, permissions } = req.body;
 
-    if (!req.user.clinicId) {
-        return res.status(400).json({ message: 'User not linked to clinic' });
+    // Security Check: Never let them modify the admin role via UI
+    if (roleId === 'admin') {
+      return res.status(403).json({ message: 'Admin role cannot be modified.' });
     }
 
-    let config = await RoleConfig.findOne({ clinicId: req.user.clinicId });
-    
-    if (!config) {
-        config = await RoleConfig.create({
-            clinicId: req.user.clinicId,
-            permissions: DEFAULT_PERMISSIONS
-        });
-    }
+    // Upsert: Update if exists, Create if it doesn't
+    await RoleConfig.findOneAndUpdate(
+      { clinicId: req.user.clinicId, roleId: roleId },
+      { permissions: permissions },
+      { new: true, upsert: true }
+    );
 
-    // Update permission
-    config.permissions[roleId] = permissions;
-    config.markModified('permissions'); 
-
-    await config.save();
-    res.json(config.permissions);
-
+    res.json({ message: 'Role updated successfully' });
   } catch (error) {
-    console.error("Update Error:", error);
-    res.status(500).json({ message: 'Server Error' });
+    res.status(500).json({ message: 'Failed to update role' });
   }
 };
 
-module.exports = { getRoleConfig, updateRoleConfig };
+module.exports = { getRoles, updateRole };

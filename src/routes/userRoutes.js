@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const statsController = require('../controllers/statsController');
 const { getUsers, createUser, updateUser, deleteUser, getMe, 
     updateMe, 
     changePassword } = require('../controllers/userController');
@@ -18,5 +19,7 @@ router.route('/')
 router.route('/:id')
   .put(updateUser)
   .delete(deleteUser);
+
+router.get('/my-stats', statsController.getMyStats);
 
 module.exports = router;

@@ -33,6 +33,10 @@ app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
 app.use('/api/invoices', require('./routes/invoiceRoutes'));
 app.use('/api/settings/whatsapp', require('./routes/whatsappRoutes'));
 app.use('/api/payroll', require('./routes/payrollRoutes'));
+app.use('/api/attendance', require('./routes/attendaceRoutes'));
+app.use('/api/financials', require('./routes/financialRoutes'));
+app.use('/api/chats', require('./routes/chatRoutes'));
+app.use('/api/messages', require('./routes/messageRoutes'));
 
 cron.schedule('30 9 * * *', () => {
   console.log('[Cron] Triggering daily retention engine...');
