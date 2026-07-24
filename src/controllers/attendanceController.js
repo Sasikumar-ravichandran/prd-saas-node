@@ -93,41 +93,57 @@ const getMonthlyAttendance = async (req, res) => {
 	}
 };
 
-// --- NEW: SAVE ENTIRE MONTH GRID ---
 const saveMonthlyBulk = async (req, res) => {
-	try {
-		const { records } = req.body; // Array of { userId, date, status }
-		const clinicId = req.user.clinicId;
-		const branchId = req.branchId || req.user.defaultBranch;
+    try {
+        const { month, year, records } = req.body; 
+        const clinicId = req.user.clinicId;
+        const branchId = req.branchId || req.user.defaultBranch;
 
-		if (!records || !Array.isArray(records)) {
-			return res.status(400).json({ message: 'Invalid data format' });
-		}
+        if (!records || !Array.isArray(records) || !month || !year) {
+            return res.status(400).json({ message: 'Month, year, and records array are required' });
+        }
 
-		// Prepare bulk operations for hyper-fast database saving
-		const bulkOps = records.map(record => ({
-			updateOne: {
-				filter: { clinicId, userId: record.userId, date: record.date },
-				update: {
-					$set: {
-						branchId,
-						status: record.status,
-						markedBy: req.user._id
-					}
-				},
-				upsert: true // Creates it if it doesn't exist
-			}
-		}));
+        const padMonth = month.toString().padStart(2, '0');
+        const lastDay = new Date(year, month, 0).getDate();
+        const startDate = `${year}-${padMonth}-01`;
+        const endDate = `${year}-${padMonth}-${lastDay}`;
 
-		if (bulkOps.length > 0) {
-			await Attendance.bulkWrite(bulkOps);
-		}
+        // 1. Wipe everything for this clinic, for this month
+        const deleteResult = await Attendance.deleteMany({
+            clinicId: clinicId,
+            date: { $gte: startDate, $lte: endDate }
+        });
+        
+        // ⚡️ Check your backend terminal when you click save! It will tell you how many ghost records it killed.
+        console.log(`Deleted ${deleteResult.deletedCount} old records for ${year}-${padMonth}`);
 
-		res.json({ message: 'Monthly roster saved successfully' });
-	} catch (error) {
-		console.error("SAVE MONTHLY BULK ERROR:", error);
-		res.status(500).json({ message: 'Failed to save monthly roster' });
-	}
+        // 2. If the user cleared the board (empty array), stop here and return success
+        if (records.length === 0) {
+            return res.json({ message: 'Monthly roster cleared successfully' });
+        }
+
+        // 3. Otherwise, save the new records
+        const bulkOps = records.map(record => ({
+            updateOne: {
+                filter: { clinicId, userId: record.userId, date: record.date },
+                update: {
+                    $set: {
+                        branchId,
+                        status: record.status,
+                        markedBy: req.user._id
+                    }
+                },
+                upsert: true
+            }
+        }));
+
+        await Attendance.bulkWrite(bulkOps);
+
+        res.json({ message: 'Monthly roster saved successfully' });
+    } catch (error) {
+        console.error("SAVE MONTHLY BULK ERROR:", error);
+        res.status(500).json({ message: 'Failed to save monthly roster' });
+    }
 };
 
 module.exports = {
