@@ -1,4 +1,4 @@
-const RoleConfig = require('../models/roleConfig');
+const RoleConfig = require('../models/RoleConfig');
 
 // 1. GET ALL ROLES FOR A CLINIC
 const getRoles = async (req, res) => {
