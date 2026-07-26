@@ -11,8 +11,6 @@ const generateToken = (id) => {
 
 // @desc    Register New Clinic (Admin Sign Up)
 // @route   POST /api/auth/register
-// controllers/authController.js
-
 const registerClinic = async (req, res) => {
   try {
     const { clinicName, fullName, email, password } = req.body;
@@ -35,32 +33,53 @@ const registerClinic = async (req, res) => {
     });
 
     // 3. Create Admin User (WITHOUT BRANCH)
-    // This allows your frontend to catch 'defaultBranch: null' and redirect.
     const user = await User.create({
       clinicId: clinic._id,
+      name: fullName,
       fullName: fullName,
       email,
       password,
       role: 'Administrator',
-
-      // KEY: Set this to null so the frontend knows to redirect!
       defaultBranch: null,
       allowedBranches: [],
-
       doctorConfig: { commissionPercentage: 0 }
     });
 
-    // 4. Initialize Permissions
-    await RoleConfig.create({
-      clinicId: clinic._id,
-      permissions: {
-        admin: ['fin_view_revenue', 'fin_edit_invoice', 'fin_discounts', 'pt_delete', 'pt_export', 'ops_settings', 'ops_calendar', 'branch_manage', 'branch_create', 'user_manage_global'],
-        branch_manager: ['fin_view_revenue', 'ops_calendar', 'ops_settings', 'user_manage_local'],
-        doctor: ['fin_view_revenue', 'ops_calendar'],
-        receptionist: ['ops_calendar', 'fin_edit_invoice'],
-        nurse: []
+    // 4. Initialize Permissions — one document per role 
+    await RoleConfig.insertMany([
+      {
+        clinicId: clinic._id,
+        roleId: 'administrator',
+        permissions: [
+          'fin_view_revenue',
+          'fin_edit_invoice',
+          'fin_discounts',
+          'pt_delete',
+          'pt_export',
+          'ops_settings',
+          'ops_calendar',
+          'branch_manage',
+          'branch_create',
+          'user_manage_global'
+        ]
+      },
+      {
+        clinicId: clinic._id,
+        roleId: 'doctor',
+        permissions: [
+          'fin_view_revenue',
+          'ops_calendar'
+        ]
+      },
+      {
+        clinicId: clinic._id,
+        roleId: 'receptionist',
+        permissions: [
+          'ops_calendar',
+          'fin_edit_invoice'
+        ]
       }
-    });
+    ]);
 
     res.status(201).json({
       _id: user._id,
@@ -69,8 +88,6 @@ const registerClinic = async (req, res) => {
       role: user.role,
       clinicId: clinic._id,
       token: generateToken(user._id),
-
-      // Return null so frontend redirects to /setup-branch
       defaultBranch: null
     });
 
@@ -107,7 +124,7 @@ const loginUser = async (req, res) => {
       if (user.mustChangePassword) {
         return res.json({
           _id: user._id,
-          fullName: user.fullName, // Use fullName
+          fullName: user.fullName,
           email: user.email,
           role: user.role,
           token: generateToken(user._id),
@@ -117,14 +134,12 @@ const loginUser = async (req, res) => {
 
       res.json({
         _id: user._id,
-        fullName: user.fullName, // Use fullName
+        fullName: user.fullName,
         email: user.email,
         role: user.role,
         clinicId: user.clinicId._id,
         clinicShortId: user.clinicId.clinicId,
         token: generateToken(user._id),
-
-        // Branch Data
         defaultBranch: user.defaultBranch?._id || null,
         branchName: user.defaultBranch?.name || null,
         branchCode: user.defaultBranch?.branchCode || null,
@@ -158,11 +173,10 @@ const changePassword = async (req, res) => {
 
     res.json({
       _id: user._id,
-      fullName: user.fullName, // Use fullName
+      fullName: user.fullName,
       email: user.email,
       role: user.role,
       token: generateToken(user._id),
-
       defaultBranch: user.defaultBranch?._id || null,
       branchName: user.defaultBranch?.name || null,
       branchCode: user.defaultBranch?.branchCode || null,
