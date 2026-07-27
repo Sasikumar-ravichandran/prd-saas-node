@@ -47,7 +47,7 @@ const createPatient = async (req, res) => {
       primaryConcern, painLevel, medicalConditions, notes,
       attachments,
       
-      // ⚡️ EXTRACT THE CUSTOM ID (if provided)
+      //  EXTRACT THE CUSTOM ID (if provided)
       patientId: customPatientId 
     } = req.body;
 
@@ -57,7 +57,7 @@ const createPatient = async (req, res) => {
 
     let finalPatientId;
 
-    // --- ⚡️ ID GENERATION / ASSIGNMENT LOGIC ---
+    // ---  ID GENERATION / ASSIGNMENT LOGIC ---
     if (customPatientId && customPatientId.trim() !== '') {
       // SCENARIO 1: Clinic provided their own physical ID
       // First, we must ensure this custom ID doesn't already exist in THIS clinic
@@ -99,7 +99,7 @@ const createPatient = async (req, res) => {
     const patient = await Patient.create({
       clinicId: req.user.clinicId,
       branchId: req.branchId, // <--- CRITICAL: Assign to Active Branch
-      patientId: finalPatientId, // ⚡️ Use the determined ID
+      patientId: finalPatientId, //  Use the determined ID
       fullName,
       age,
       gender,
@@ -233,8 +233,8 @@ const getPatients = async (req, res) => {
       totalPages: Math.ceil(total / limit),
       currentPage: page,
       totalCount: total,
-      globalTotal,      // ⚡️ Send to frontend
-      globalPending     // ⚡️ Send to frontend
+      globalTotal,      //  Send to frontend
+      globalPending     //  Send to frontend
     });
 
   } catch (error) {
@@ -263,11 +263,11 @@ const getPatientById = async (req, res) => {
       return res.status(400).json({ message: 'Invalid Patient ID format' });
     }
 
-    // ⚡️ FIXED: Added .lean() so we can attach new data to the Mongoose object
+    //  FIXED: Added .lean() so we can attach new data to the Mongoose object
     const patient = await Patient.findOne(query).lean();
 
     if (patient) {
-      // ⚡️ FIXED: Fetch all appointments for this specific patient
+      //  FIXED: Fetch all appointments for this specific patient
       const appointments = await Appointment.find({ 
         clinicId: req.user.clinicId,
         patientId: patient._id 
@@ -299,7 +299,7 @@ const updateToothCondition = async (req, res) => {
     const { id } = req.params;
     const { tooth, condition } = req.body;
 
-    // ⚡️ FIXED: Smart Query to handle both 'PID-1001' and Mongo ObjectIds
+    //  FIXED: Smart Query to handle both 'PID-1001' and Mongo ObjectIds
     let query = {
       clinicId: req.user.clinicId,
       branchId: req.branchId

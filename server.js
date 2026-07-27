@@ -29,7 +29,7 @@ io.on("connection", (socket) => {
   socket.on("setup", (userData) => {
     socket.join(userData._id);
 
-    // ⚡️ ONLINE STATUS LOGIC
+    //  ONLINE STATUS LOGIC
     if (!onlineUsers.includes(userData._id)) {
       onlineUsers.push(userData._id);
     }
@@ -42,7 +42,7 @@ io.on("connection", (socket) => {
     socket.join(room);
   });
 
-  // ⚡️ READ RECEIPTS LOGIC (Blue Ticks)
+  //  READ RECEIPTS LOGIC (Blue Ticks)
   socket.on("mark as read", async ({ chatId, userId }) => {
     try {
       // 1. Update the database to add this user to the readBy array
@@ -76,7 +76,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// 5. Start Server (⚡️ IMPORTANT: using server.listen instead of app.listen)
+// 5. Start Server ( IMPORTANT: using server.listen instead of app.listen)
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {

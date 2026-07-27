@@ -17,7 +17,7 @@ const ProcedureSchema = new mongoose.Schema({
   // 3. Financials
   price: { type: Number, required: true, min: 0 }, 
 
-  // ⚡️ CRITICAL: Keep this! 
+  //  CRITICAL: Keep this! 
   // This is the "Expense" attached to the work, regardless of who does it.
   labCost: { type: Number, default: 0 }, 
 

@@ -11,7 +11,7 @@ const createInvoice = async (req, res) => {
   try {
     const { patientId, doctorId, items, discount, notes, dueDate } = req.body;
 
-    // ⚡️ 1. BULLETPROOF DOCTOR RESOLUTION
+    //  1. BULLETPROOF DOCTOR RESOLUTION
     // No matter what the frontend sends ("Prashanth" or "6a1902..."), we find the real ID.
     let doctor = null;
     let actualDoctorId = null;
@@ -31,7 +31,7 @@ const createInvoice = async (req, res) => {
       });
     }
 
-    // ⚡️ Grab the verified, 100% authentic MongoDB ID
+    //  Grab the verified, 100% authentic MongoDB ID
     actualDoctorId = doctor._id;
     const commissionRate = doctor.doctorConfig?.commissionPercentage || 0;
 
@@ -58,7 +58,7 @@ const createInvoice = async (req, res) => {
       clinicId: req.user.clinicId,
       branchId: req.branchId || req.user.defaultBranch,
       patientId,
-      doctorId: actualDoctorId, // ⚡️ THE MAGIC FIX: Force Mongoose to use the verified ID!
+      doctorId: actualDoctorId, //  THE MAGIC FIX: Force Mongoose to use the verified ID!
       invoiceNumber,
       items: processedItems,
       totalAmount,
@@ -139,7 +139,7 @@ const voidInvoice = async (req, res) => {
       
       await Patient.collection.updateOne(
         { _id: new mongoose.Types.ObjectId(invoice.patientId) },
-        { $set: { "treatmentPlan.$[elem].billed": false } }, // ⚡️ Change back to false!
+        { $set: { "treatmentPlan.$[elem].billed": false } }, //  Change back to false!
         { arrayFilters: [{ "elem._id": { $in: treatmentObjectIds } }] }
       );
     }
@@ -170,7 +170,7 @@ const recordPayment = async (req, res) => {
       return res.status(400).json({ message: `Cannot overpay. Balance due is ₹${invoice.balance}` });
     }
 
-    // ⚡️ FIXED: Initialize the array if it's undefined
+    //  FIXED: Initialize the array if it's undefined
     if (!invoice.payments) {
       invoice.payments = [];
     }

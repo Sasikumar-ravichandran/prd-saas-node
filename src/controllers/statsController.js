@@ -88,7 +88,7 @@ exports.getMyStats = async (req, res) => {
 						"recentActivity": [
 							{ $sort: { createdAt: -1 } },
 
-							// ⚡️ NEW: Look up the patient details from the database
+							//  NEW: Look up the patient details from the database
 							{
 								$lookup: {
 									from: 'patients', // The name of your patients collection in MongoDB
@@ -107,7 +107,7 @@ exports.getMyStats = async (req, res) => {
 									procedure: "$items.procedureName",
 									earned: "$items.doctorCommissionAmount",
 
-									// ⚡️ NEW: Pass the patient's full name to the frontend
+									//  NEW: Pass the patient's full name to the frontend
 									patientName: "$patientInfo.fullName"
 								}
 							}

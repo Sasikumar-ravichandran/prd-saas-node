@@ -114,7 +114,7 @@ const saveMonthlyBulk = async (req, res) => {
             date: { $gte: startDate, $lte: endDate }
         });
         
-        // ⚡️ Check your backend terminal when you click save! It will tell you how many ghost records it killed.
+        //  Check your backend terminal when you click save! It will tell you how many ghost records it killed.
         console.log(`Deleted ${deleteResult.deletedCount} old records for ${year}-${padMonth}`);
 
         // 2. If the user cleared the board (empty array), stop here and return success

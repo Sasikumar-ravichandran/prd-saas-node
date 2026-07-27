@@ -25,7 +25,7 @@ const getProcedures = async (req, res) => {
 // @access  Private
 const createProcedure = async (req, res) => {
     try {
-        // ⚡️ UPDATED: Added labCost & category, Removed commission
+        //  UPDATED: Added labCost & category, Removed commission
         const { code, name, price, labCost, category, active } = req.body;
 
         // Check for duplicates
@@ -44,7 +44,7 @@ const createProcedure = async (req, res) => {
             name,
             price,
             
-            // ⚡️ NEW FIELDS
+            //  NEW FIELDS
             labCost: labCost || 0, 
             category: category || 'General',
 
@@ -78,7 +78,7 @@ const updateProcedure = async (req, res) => {
         if (req.body.name) procedure.name = req.body.name;
         if (req.body.price !== undefined) procedure.price = req.body.price;
 
-        // ⚡️ NEW FIELDS UPDATES
+        //  NEW FIELDS UPDATES
         if (req.body.labCost !== undefined) procedure.labCost = req.body.labCost;
         if (req.body.category) procedure.category = req.body.category;
 

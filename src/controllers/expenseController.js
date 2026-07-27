@@ -49,7 +49,7 @@ const updateExpense = async (req, res) => {
     const expense = await Expense.findOneAndUpdate(
       { 
         _id: req.params.id, 
-        clinicId: req.user.clinicId // ⚡️ REMOVED branchId completely
+        clinicId: req.user.clinicId //  REMOVED branchId completely
       },
       req.body,
       { new: true }
@@ -68,7 +68,7 @@ const deleteExpense = async (req, res) => {
   try {
     const expense = await Expense.findOneAndDelete({ 
       _id: req.params.id, 
-      clinicId: req.user.clinicId // ⚡️ REMOVED branchId completely
+      clinicId: req.user.clinicId //  REMOVED branchId completely
     });
     
     if (!expense) return res.status(404).json({ message: 'Expense not found or unauthorized' });

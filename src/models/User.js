@@ -44,7 +44,7 @@ const UserSchema = new mongoose.Schema({
     },
     mustChangePassword: { type: Boolean, default: false },
 
-    // ⚡️⚡️ 4. UNIVERSAL COMPENSATION (Applies to everyone) ⚡️⚡️
+    //  4. UNIVERSAL COMPENSATION (Applies to everyone) 
     baseSalary: { type: Number, default: 0 }, 
     commissionRate: { type: Number, default: 0, min: 0, max: 100 }, 
 

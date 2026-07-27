@@ -30,7 +30,7 @@ const getDoctorStats = async (req, res) => {
         // 3. Identify "Active" Appt
         let activeAppt = appointments.find(a => a.status === 'In Progress');
 
-        // ⚡️ NEW: If no formal appointment is active, check for "Walk-ins" or patients 
+        //  NEW: If no formal appointment is active, check for "Walk-ins" or patients 
         // who have a treatment marked "In Progress" today assigned to this doctor.
         let clinicalActivePatient = null;
         if (!activeAppt) {
@@ -60,7 +60,7 @@ const getDoctorStats = async (req, res) => {
                 status: activeAppt.status,
             };
         } else if (clinicalActivePatient) {
-            // ⚡️ From Clinical Record (No Appointment)
+            //  From Clinical Record (No Appointment)
             activePatientData = {
                 id: clinicalActivePatient._id,
                 name: clinicalActivePatient.fullName,
@@ -119,7 +119,7 @@ const getDoctorStats = async (req, res) => {
                 time: new Date(appt.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                 startTime: appt.start,
                 name: patient.fullName || appt.title || 'Walk-in',
-                type: smartTreatmentText, // ⚡️ Now sends the active treatments OR the fallback type
+                type: smartTreatmentText, //  Now sends the active treatments OR the fallback type
                 originalType: appt.type,  // Keep the original just in case
                 activeTreatments: activeTreatments, // Send the array to the frontend for UI styling
                 status: appt.status,
@@ -171,7 +171,7 @@ const getReceptionStats = async (req, res) => {
         const now = new Date();
 
         // --- 1. DOCTOR STATUS (TRAFFIC LIGHTS) ---
-        // ⚡️ FIX 1: Add 'fullName' to the .select() statement!
+        //  FIX 1: Add 'fullName' to the .select() statement!
         const doctors = await User.find({
             clinicId,
             role: { $in: ['Doctor', 'doctor'] },
@@ -196,12 +196,12 @@ const getReceptionStats = async (req, res) => {
         }).select('fullName assignedDoctor treatmentPlan');
 
         const doctorStatus = doctors.map(doc => {
-            // ⚡️ FIX 2: Safely grab the doctor's name, prioritizing fullName
+            //  FIX 2: Safely grab the doctor's name, prioritizing fullName
             const docName = doc.fullName || doc.name || 'Unknown Doctor';
 
             const activeAppt = activeAppointments.find(a => a.doctorId && a.doctorId.toString() === doc._id.toString());
 
-            // ⚡️ FIX 3: Check if assignedDoctor matches either fullName or name
+            //  FIX 3: Check if assignedDoctor matches either fullName or name
             const clinicalPatient = activePatients.find(p =>
                 (p.assignedDoctor === doc.fullName || p.assignedDoctor === doc.name) &&
                 p.treatmentPlan.some(t => t.status === 'In Progress')
@@ -221,7 +221,7 @@ const getReceptionStats = async (req, res) => {
                 timer = 'Chart';
             }
 
-            // ⚡️ FIX 4: Pass the correct 'docName' to the frontend
+            //  FIX 4: Pass the correct 'docName' to the frontend
             return { id: doc._id, doctor: docName, status, patient: patientName, timer };
         });
 
@@ -264,7 +264,7 @@ const getReceptionStats = async (req, res) => {
                 name: patient.fullName || appt.title || 'Walk-in',
                 displayId: patient.patientId || '',
                 mongoId: patient._id || null,
-                // ⚡️ FIX 5: Fallback for doctor name in the flow table too
+                //  FIX 5: Fallback for doctor name in the flow table too
                 doc: appt.doctorId?.fullName || appt.doctorId?.name || 'Unassigned',
                 status: appt.status || 'Scheduled',
                 payStatus: payStatus,
@@ -279,7 +279,7 @@ const getReceptionStats = async (req, res) => {
             createdAt: { $gte: startOfDay, $lte: endOfDay }
         });
 
-        // ⚡️ NEW: Fetch Today's Expenses for this branch
+        //  NEW: Fetch Today's Expenses for this branch
         const todaysExpenses = await Expense.find({
             clinicId,
             branchId,
@@ -401,11 +401,11 @@ const getAdminStats = async (req, res) => {
                 type: 'Income'
             })),
             ...recentExpenses.map(e => {
-                // ⚡️ NEW: Extract staff name securely
+                //  NEW: Extract staff name securely
                 const staffName = e.recordedBy?.fullName || e.recordedBy?.name || 'Staff';
                 return {
                     id: 'EXP',
-                    // ⚡️ NEW: Append the staff name to the transaction details
+                    //  NEW: Append the staff name to the transaction details
                     details: `${e.vendor || e.title || 'Expense'} (By: ${staffName})`, 
                     amount: e.amount,
                     method: e.paymentMethod,
@@ -419,7 +419,7 @@ const getAdminStats = async (req, res) => {
         mixedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
         mixedTransactions = mixedTransactions.slice(0, 10);
 
-        // ⚡️ 9. TARGET APPOINTMENTS [Scoped to Branch & Requested Date]
+        //  9. TARGET APPOINTMENTS [Scoped to Branch & Requested Date]
         const queryDate = req.query.date ? new Date(req.query.date) : new Date();
         const startOfTargetDay = new Date(queryDate); startOfTargetDay.setHours(0, 0, 0, 0);
         const endOfTargetDay = new Date(queryDate); endOfTargetDay.setHours(23, 59, 59, 999);

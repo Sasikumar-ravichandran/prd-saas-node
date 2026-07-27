@@ -5,12 +5,12 @@ const InvoiceSchema = new mongoose.Schema({
   branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch', required: true },
   patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'Patient', required: true },
 
-  // ⚡️ PRIMARY DOCTOR (Useful for the commission reports)
+  //  PRIMARY DOCTOR (Useful for the commission reports)
   doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
   invoiceNumber: { type: String, required: true }, // e.g., INV-001
 
-  // ⚡️ THE PROCEDURES BEING BILLED
+  //  THE PROCEDURES BEING BILLED
   items: [{
     treatmentId: { type: String }, // Link to patient.treatmentPlan._id
     procedureName: { type: String, required: true },

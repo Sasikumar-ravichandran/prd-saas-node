@@ -42,12 +42,12 @@ const getPayrollReport = async (req, res) => {
             const endStr = `${end.getFullYear()}-${(end.getMonth() + 1).toString().padStart(2, '0')}-${end.getDate().toString().padStart(2, '0')}`;
             dateFilter = { $gte: startStr, $lte: endStr };
         } else {
-            // ⚡️ FIX 1: Uses the safely parsed 'y' and 'm' numbers
+            //  FIX 1: Uses the safely parsed 'y' and 'm' numbers
             const padMonth = m.toString().padStart(2, '0');
             dateFilter = { $regex: `^${y}-${padMonth}` };
         }
 
-        // ⚡️ FIX 2: Build strict query including branchId
+        //  FIX 2: Build strict query including branchId
         const attendanceQuery = { clinicId, date: dateFilter };
         if (branchId) attendanceQuery.branchId = branchId; 
 
@@ -66,7 +66,7 @@ const getPayrollReport = async (req, res) => {
             const baseSalary = staff.baseSalary || 0;
             const commissionRate = staff.commissionRate || 0;
 
-            // --- ⚡️ FIX 3: BULLETPROOF ATTENDANCE MATH ---
+            // ---  FIX 3: BULLETPROOF ATTENDANCE MATH ---
             const staffAttendance = attendanceRecords.filter(a => a.userId.toString() === staff._id.toString());
 
             // Helper function to safely read status strings from DB

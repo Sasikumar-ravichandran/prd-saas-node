@@ -38,7 +38,7 @@ const getUsers = async (req, res) => {
         // 6. Get Total Count for the Frontend Pagination UI
         const total = await User.countDocuments(query);
 
-        // ⚡️ Return the data structured exactly like your getPatients response
+        //  Return the data structured exactly like your getPatients response
         res.json({
             users,
             totalPages: Math.ceil(total / limit),
@@ -83,11 +83,11 @@ const createUser = async (req, res) => {
             doctorConfig: role === 'Doctor' ? doctorConfig : undefined
         });
 
-        // 3. ⚡️ POPULATE BEFORE RESPONDING
+        // 3.  POPULATE BEFORE RESPONDING
         // This ensures the frontend gets the branch NAME, not just the ID
         await user.populate('defaultBranch', 'branchName name branchCode');
 
-        // 4. ⚡️ SEND EVERYTHING
+        // 4.  SEND EVERYTHING
         // user.toObject() converts the Mongoose doc to a plain JS object so we don't miss anything
         const userResponse = user.toObject();
         delete userResponse.password; // Security: remove password
@@ -128,10 +128,10 @@ const updateUser = async (req, res) => {
         // 4. Save
         const updatedUser = await user.save();
 
-        // 5. ⚡️ POPULATE AGAIN (Critical Step)
+        // 5.  POPULATE AGAIN (Critical Step)
         await updatedUser.populate('defaultBranch', 'branchName name branchCode');
 
-        // 6. ⚡️ SEND EVERYTHING (The Fix)
+        // 6.  SEND EVERYTHING (The Fix)
         // Instead of manually picking fields, we send the whole object.
         const responseObj = updatedUser.toObject();
         delete responseObj.password;
@@ -181,7 +181,7 @@ const updateMe = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // ⚡️ FIXED: Map incoming data to the correct Model fields (fullName and mobile)
+        //  FIXED: Map incoming data to the correct Model fields (fullName and mobile)
         if (req.body.fullName || req.body.name) {
             user.fullName = req.body.fullName || req.body.name;
         }

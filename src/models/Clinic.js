@@ -31,7 +31,7 @@ const ClinicSchema = new mongoose.Schema({
 		twilioAuthToken: { type: String, default: '' },
 		twilioSenderNumber: { type: String, default: '' },
 
-		// ⚡️ NEW: A dynamic dictionary of all message templates
+		//  NEW: A dynamic dictionary of all message templates
 		triggers: {
 			type: Map,
 			of: new mongoose.Schema({

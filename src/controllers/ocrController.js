@@ -1,5 +1,5 @@
 const multer = require('multer');
-const fs = require('fs'); // ⚡️ ADDED: File System module to read files from disk
+const fs = require('fs'); //  ADDED: File System module to read files from disk
 const { extractFormData } = require('../services/ocrService');
 const Clinic = require('../models/Clinic');
 
@@ -16,7 +16,7 @@ const scanIntakeForm = async (req, res) => {
 
 		console.log(`[OCR] Scanning form for Clinic ID: ${req.user.clinicId}`);
 
-		// ⚡️ BULLETPROOF FILE HANDLING: Check if it's in Memory or on Disk
+		//  BULLETPROOF FILE HANDLING: Check if it's in Memory or on Disk
 		let imageBuffer;
 		if (req.file.buffer) {
 			imageBuffer = req.file.buffer; // It was saved in RAM
@@ -49,7 +49,7 @@ const scanIntakeForm = async (req, res) => {
 	} catch (error) {
 		console.error("[OCR Controller] Form Scan Error:", error);
 
-		// ⚡️ FIXED: Proper try/catch for synchronous file deletion
+		//  FIXED: Proper try/catch for synchronous file deletion
 		if (req.file && req.file.path) {
 			try {
 				fs.unlinkSync(req.file.path);

@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const Prescription = require('../models/Prescription');
 const Drug = require('../models/Drug');
 
-// ⚡️ 1. Define getDrugs (Make sure this exists!)
+//  1. Define getDrugs (Make sure this exists!)
 const getDrugs = async (req, res) => {
   try {
     const drugs = await Drug.find({ clinicId: req.user.clinicId }).sort({ name: 1 });
@@ -13,7 +13,7 @@ const getDrugs = async (req, res) => {
   }
 };
 
-// ⚡️ 2. Define createPrescription
+//  2. Define createPrescription
 const createPrescription = async (req, res) => {
   try {
     let { patientId, doctorId, medications, notes, appointmentId } = req.body;
@@ -22,7 +22,7 @@ const createPrescription = async (req, res) => {
     console.log("Medications Type:", typeof medications);
     console.log("Medications Value:", medications);
 
-    // ⚡️ SAFE PARSING
+    //  SAFE PARSING
     if (typeof medications === 'string') {
       try {
         // If it's a string, it must be valid JSON. 
@@ -58,7 +58,7 @@ const createPrescription = async (req, res) => {
   }
 };
 
-// ⚡️ 3. Define getPatientPrescriptions
+//  3. Define getPatientPrescriptions
 const getPatientPrescriptions = async (req, res) => {
   try {
     const history = await Prescription.find({
@@ -74,7 +74,7 @@ const getPatientPrescriptions = async (req, res) => {
   }
 };
 
-// ⚡️ 4. Define deletePrescription
+//  4. Define deletePrescription
 const deletePrescription = async (req, res) => {
   try {
     const { id } = req.params;
@@ -118,7 +118,7 @@ const updatePrescription = async (req, res) => {
   }
 };
 
-// ⚡️ 5. Now Export everything together
+//  5. Now Export everything together
 module.exports = {
   getDrugs,
   createPrescription,

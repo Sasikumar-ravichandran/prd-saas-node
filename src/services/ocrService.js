@@ -17,7 +17,7 @@ const extractFormData = async (imageBuffer, mimeType, clinicApiKey) => {
       },
     };
 
-    // ⚡️ SAAS ARCHITECTURE: Force the AI to output exactly the keys your frontend needs
+    //  SAAS ARCHITECTURE: Force the AI to output exactly the keys your frontend needs
     const patientSchema = {
       type: Type.OBJECT,
       properties: {

@@ -17,7 +17,7 @@ const PrescriptionSchema = new mongoose.Schema({
 
   appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
 
-  // ⚡️ Reference the sub-schema here
+  //  Reference the sub-schema here
   medications: [medicationSchema],
 
   notes: String,
