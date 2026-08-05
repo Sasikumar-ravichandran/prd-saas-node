@@ -57,27 +57,80 @@ const superAdminLogin = async (req, res) => {
 // ==========================================
 const getDashboardData = async (req, res) => {
   try {
-    // 1. Run global counts and fetch clinics in parallel
-    const [clinics, totalUsers, totalBranches, totalPatients] = await Promise.all([
-      Clinic.find().sort({ createdAt: -1 }).lean(),
+    // Extract Pagination & Filter params from query
+    const { page = 1, limit = 10, search = '', filter = 'ALL' } = req.query;
+    
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+
+    // 1. Calculate Global Stats FIRST (Always fast, no data payload)
+    const [
+      totalClinics,
+      pendingApproval,
+      activeClinics,
+      suspendedClinics,
+      totalUsers,
+      totalBranches,
+      totalPatients
+    ] = await Promise.all([
+      Clinic.countDocuments(),
+      Clinic.countDocuments({ accountStatus: 'Pending_Approval' }),
+      Clinic.countDocuments({ accountStatus: 'Active' }),
+      Clinic.countDocuments({ accountStatus: 'Suspended' }),
       User.countDocuments({ isSuperAdmin: { $ne: true } }),
       Branch.countDocuments(),
       Patient.countDocuments()
     ]);
 
-    // 2. Map Administrators for each clinic
+    const stats = {
+      totalClinics, pendingApproval, activeClinics, suspendedClinics, totalUsers, totalBranches, totalPatients
+    };
+
+    // 2. Build the Search & Filter Query Object for Clinics
+    let query = {};
+    
+    // Filter Tab
+    if (filter && filter !== 'ALL') {
+      query.accountStatus = filter;
+    }
+
+    // Search Bar (Matches Clinic Name, Clinic ID, or Admin Email)
+    if (search) {
+      // Step A: Check if the search matches any admin emails
+      const matchingAdmins = await User.find({
+        email: { $regex: search, $options: 'i' },
+        role: { $in: ['Clinic Admin', 'Administrator'] }
+      }).select('clinicId').lean();
+      
+      const matchingClinicIds = matchingAdmins.map(admin => admin.clinicId);
+
+      // Step B: Search by Name, ID, or the matched Admin Emails
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { clinicId: { $regex: search, $options: 'i' } },
+        { _id: { $in: matchingClinicIds } }
+      ];
+    }
+
+    // 3. Fetch ONLY the paginated Clinics
+    const [clinics, totalFilteredClinics] = await Promise.all([
+      Clinic.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      Clinic.countDocuments(query)
+    ]);
+
+    // 4. Enrich ONLY the fetched clinics (Massive Performance Boost)
     const clinicIds = clinics.map(c => c._id);
     const adminUsers = await User.find({
       clinicId: { $in: clinicIds },
-      role: 'Administrator'
-    }).select('clinicId fullName email createdAt').lean();
+      role: { $in: ['Clinic Admin', 'Administrator'] }
+    }).select('clinicId fullName email').lean();
 
     const adminMap = {};
     adminUsers.forEach(admin => {
       adminMap[admin.clinicId] = admin;
     });
 
-    // 3. Attach aggregate counts per clinic (No patient data ever loaded into memory!)
     const enrichedClinics = await Promise.all(
       clinics.map(async (clinic) => {
         const [userCount, patientCount, branchCount] = await Promise.all([
@@ -97,17 +150,13 @@ const getDashboardData = async (req, res) => {
       })
     );
 
-    const stats = {
-      totalClinics: clinics.length,
-      pendingApproval: clinics.filter(c => c.accountStatus === 'Pending_Approval').length,
-      activeClinics: clinics.filter(c => c.accountStatus === 'Active').length,
-      suspendedClinics: clinics.filter(c => c.accountStatus === 'Suspended').length,
-      totalUsers,
-      totalBranches,
-      totalPatients
-    };
-
-    res.status(200).json({ stats, clinics: enrichedClinics });
+    res.status(200).json({ 
+      stats, 
+      clinics: enrichedClinics,
+      totalCount: totalFilteredClinics, // Crucial for frontend pagination
+      currentPage: pageNum,
+      totalPages: Math.ceil(totalFilteredClinics / limitNum)
+    });
   } catch (error) {
     console.error('Super Admin Dashboard Error:', error);
     res.status(500).json({ message: 'Failed to load SaaS analytics.' });

@@ -8,7 +8,7 @@ const createAdmin = async () => {
     await mongoose.connect(process.env.MONGO_URI);
     console.log('MongoDB Connected...');
 
-    const email = 'support@klinichub.com';
+  const email = 'support@klinichub.com';
     const plainTextPassword = 'Sasikumar@28'; 
 
     const existingUser = await User.findOne({ email });
@@ -23,7 +23,7 @@ const createAdmin = async () => {
       name: 'Sasikumar Ravi',
       fullName: 'Sasikumar Ravi',
       email: email,
-      password: plainTextPassword, // 👈 Just pass the plain string!
+      password: plainTextPassword, //Just pass the plain string!
       role: 'SuperAdmin',
       isSuperAdmin: true,
       clinicId: null, 
@@ -31,10 +31,10 @@ const createAdmin = async () => {
       allowedBranches: [],
     });
 
-    console.log(`✅ Success! Super Admin created for: ${superAdmin.email}`);
+    console.log(` Success! Super Admin created for: ${superAdmin.email}`);
     process.exit(0);
   } catch (error) {
-    console.error('❌ Error creating Super Admin:', error);
+    console.error(' Error creating Super Admin:', error);
     process.exit(1);
   }
 };
