@@ -37,6 +37,7 @@ app.use('/api/attendance', require('./routes/attendaceRoutes'));
 app.use('/api/financials', require('./routes/financialRoutes'));
 app.use('/api/chats', require('./routes/chatRoutes'));
 app.use('/api/messages', require('./routes/messageRoutes'));
+app.use('/api/super-admin', require('./routes/superAdminRoutes'));
 
 cron.schedule('30 9 * * *', () => {
   console.log('[Cron] Triggering daily retention engine...');
@@ -46,8 +47,5 @@ cron.schedule('30 9 * * *', () => {
   timezone: "Asia/Kolkata"
 });
 
-// cron.schedule('* * * * *', () => {
-//   runRetentionEngine();
-// });
 
 module.exports = app;

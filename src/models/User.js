@@ -6,7 +6,7 @@ const UserSchema = new mongoose.Schema({
     clinicId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Clinic',
-        required: true,
+        required: function() { return !this.isSuperAdmin; },
         index: true
     },
 
@@ -30,7 +30,7 @@ const UserSchema = new mongoose.Schema({
 
     role: {
         type: String,
-        enum: ['Administrator', 'Doctor', 'Receptionist'],
+        enum: ['Administrator', 'Doctor', 'Receptionist', 'SuperAdmin'],
         default: 'Receptionist'
     },
 
@@ -52,6 +52,12 @@ const UserSchema = new mongoose.Schema({
     doctorConfig: {
         specialization: { type: String, default: 'General Dentist' }, 
         registrationNumber: { type: String } 
+    },
+
+    isSuperAdmin: {
+        type: Boolean,
+        default: false,
+        index: true
     }
 
 }, { timestamps: true });
@@ -63,7 +69,6 @@ UserSchema.pre('save', async function () {
     if (!this.isModified('password')) {
         return;
     }
-
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
 });

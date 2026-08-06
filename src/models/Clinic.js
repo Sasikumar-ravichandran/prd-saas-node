@@ -10,6 +10,12 @@ const ClinicSchema = new mongoose.Schema({
 	registrationNumber: { type: String },   // License / Registration
 	gstin: { type: String },                // Tax ID
 
+	accountStatus: {
+		type: String,
+		enum: ['Pending_Approval', 'Active', 'Suspended'],
+		default: 'Pending_Approval'
+	},
+
 	// Contact
 	phone: { type: String },
 	email: { type: String },
@@ -27,24 +33,27 @@ const ClinicSchema = new mongoose.Schema({
 
 	whatsappConfig: {
 		whatsappEnabled: { type: Boolean, default: false },
-		twilioAccountSid: { type: String, default: '' },
-		twilioAuthToken: { type: String, default: '' },
-		twilioSenderNumber: { type: String, default: '' },
 
-		//  NEW: A dynamic dictionary of all message templates
+		// META CLOUD API CREDENTIALS (BYON)
+		phoneNumberId: { type: String, default: '' }, // e.g., '109876543210123'
+		wabaId: { type: String, default: '' },        // WhatsApp Business Account ID
+		accessToken: { type: String, default: '' },     // The clinic's System User token
+
+		// UPGRADED TRIGGERS DICTIONARY
 		triggers: {
 			type: Map,
 			of: new mongoose.Schema({
 				enabled: { type: Boolean, default: false },
-				template: { type: String, default: '' }
+				templateName: { type: String, default: '' }, // Approved name in Meta (e.g., 'appointment_reminder')
+				languageCode: { type: String, default: 'en' }  // e.g., 'en', 'en_US', 'ta'
 			}, { _id: false }),
 			default: {}
 		}
 	},
 	aiConfig: {
 		enabled: {
-			type: Boolean, 
-			default: false 
+			type: Boolean,
+			default: false
 		},
 		geminiApiKey: {
 			type: String,

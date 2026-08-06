@@ -6,14 +6,14 @@ const Clinic = require('../models/Clinic');
 const getClinicProfile = async (req, res) => {
     try {
         if (!req.user || !req.user.clinicId) {
-            console.log("❌ Missing Clinic ID on User");
+            console.log(" Missing Clinic ID on User");
             return res.json([]); 
         }
 
         const clinic = await Clinic.findById(req.user.clinicId);
         
         if (!clinic) {
-            console.log("❌ Clinic Not Found in DB");
+            console.log(" Clinic Not Found in DB");
             return res.status(404).json({ message: 'Clinic not found' });
         }
 
