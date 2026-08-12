@@ -1,54 +1,135 @@
 const Patient = require('../models/Patient');
+const Clinic = require('../models/Clinic');
+const Appointment = require('../models/Appointment');
+const Invoice = require('../models/Invoice');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const Appointment = require('../models/Appointment');
-const Invoice = require('../models/Invoice');
-// @desc    Create a new patient
-// @route   POST /api/patients
-// @access  Private (Clinic Staff Only)
+
+//  IMPORT THE AUDIT LOGGER
+const logAudit = require('../utils/auditLogger'); // Adjust path if it is in /services
+
+const getCloudUploadUrl = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { fileName, fileType } = req.body;
+
+    if (!fileName || !fileType) return res.status(400).json({ message: 'File name and type are required' });
+
+    const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
+
+    const uploadData = await generateUploadUrl(fileName, fileType, req.user.clinicId, patient._id);
+    res.status(200).json({ data: uploadData });
+  } catch (error) {
+    console.error("Presigned URL Error:", error);
+    res.status(500).json({ message: 'Failed to generate upload URL' });
+  }
+};
+
+const saveAttachmentUrl = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, fileUrl } = req.body;
+
+    if (!fileUrl) return res.status(400).json({ message: 'File URL is required' });
+
+    const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
+
+    if (!patient.attachments) patient.attachments = { photo: '', scans: [], documents: [] };
+
+    if (type === 'photo') {
+      patient.attachments.photo = fileUrl;
+    } else if (type === 'document') {
+      if (!patient.attachments.documents) patient.attachments.documents = [];
+      patient.attachments.documents.push(fileUrl);
+    } else {
+      if (!patient.attachments.scans) patient.attachments.scans = [];
+      patient.attachments.scans.push(fileUrl);
+    }
+
+    await patient.save();
+
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'UPLOAD_FILE', entity: 'Patient', entityId: patient._id,
+      details: `Uploaded new ${type} to patient profile`
+    });
+
+    res.status(200).json({ message: 'File saved to profile', attachments: patient.attachments });
+  } catch (error) {
+    console.error("Save Attachment Error:", error);
+    res.status(500).json({ message: 'Failed to save attachment link' });
+  }
+};
+
+const deleteCloudAttachment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { fileUrl } = req.body; 
+
+    if (!fileUrl) return res.status(400).json({ message: 'File URL is required' });
+
+    const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
+
+    if (patient.attachments) {
+      if (patient.attachments.scans) patient.attachments.scans = patient.attachments.scans.filter(url => url !== fileUrl);
+      if (patient.attachments.documents) patient.attachments.documents = patient.attachments.documents.filter(url => url !== fileUrl);
+      if (patient.attachments.photo === fileUrl) patient.attachments.photo = "";
+    }
+    await patient.save();
+
+    const cdnDomain = process.env.AWS_CDN_DOMAIN;
+    if (fileUrl.includes(cdnDomain)) {
+      const fileKey = fileUrl.split(`${cdnDomain}/`)[1];
+      if (fileKey) await deleteFileFromS3(fileKey);
+    }
+
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'DELETE_FILE', entity: 'Patient', entityId: patient._id,
+      details: `Deleted a cloud attachment from patient profile`
+    });
+
+    res.status(200).json({ message: 'File permanently deleted', attachments: patient.attachments });
+  } catch (error) {
+    console.error("Cloud Delete Error:", error);
+    res.status(500).json({ message: 'Failed to delete file' });
+  }
+};
 
 const scanIntakeForm = async (req, res) => {
-    try {
-        if (!req.file) return res.status(400).json({ message: "No image file provided." });
+  try {
+    if (!req.file) return res.status(400).json({ message: "No image file provided." });
 
-        // 1. Fetch the clinic's settings from the DB
-        // Assuming you have a Clinic model imported
-        const clinic = await Clinic.findOne({ clinicId: req.user.clinicId });
-        
-        const apiKey = clinic?.aiConfig?.geminiApiKey;
+    const clinic = await Clinic.findOne({ clinicId: req.user.clinicId });
+    const apiKey = clinic?.aiConfig?.geminiApiKey;
 
-        if (!apiKey) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "API_KEY_MISSING" // Frontend will catch this specific message
-            });
-        }
+    if (!apiKey) return res.status(400).json({ success: false, message: "API_KEY_MISSING" });
 
-        // 2. Pass the key to the scanner
-        const extractedData = await extractFormData(req.file.buffer, req.file.mimetype, apiKey);
+    const extractedData = await extractFormData(req.file.buffer, req.file.mimetype, apiKey);
 
-        res.status(200).json({ success: true, data: extractedData });
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'AI_SCAN', entity: 'System', entityId: req.user.clinicId,
+      details: `Scanned intake form using AI OCR`
+    });
 
-    } catch (error) {
-        if (error.status === 429) {
-             return res.status(429).json({ message: "LIMIT_REACHED" });
-        }
-        res.status(500).json({ message: "Failed to read form." });
-    }
+    res.status(200).json({ success: true, data: extractedData });
+  } catch (error) {
+    if (error.status === 429) return res.status(429).json({ message: "LIMIT_REACHED" });
+    res.status(500).json({ message: "Failed to read form." });
+  }
 };
 
 const createPatient = async (req, res) => {
   try {
     const {
-      fullName, age, gender, mobile, bloodGroup,
-      emergencyContact, emergencyRelation,
-      assignedDoctor, referredBy, communication,
-      primaryConcern, painLevel, medicalConditions, notes,
-      attachments,
-      
-      //  EXTRACT THE CUSTOM ID (if provided)
-      patientId: customPatientId 
+      fullName, age, gender, mobile, bloodGroup, emergencyContact, emergencyRelation,
+      assignedDoctor, referredBy, communication, primaryConcern, painLevel, medicalConditions, notes,
+      attachments, patientId: customPatientId, specialtyData
     } = req.body;
 
     if (!fullName || !mobile || !assignedDoctor) {
@@ -57,138 +138,86 @@ const createPatient = async (req, res) => {
 
     let finalPatientId;
 
-    // ---  ID GENERATION / ASSIGNMENT LOGIC ---
     if (customPatientId && customPatientId.trim() !== '') {
-      // SCENARIO 1: Clinic provided their own physical ID
-      // First, we must ensure this custom ID doesn't already exist in THIS clinic
-      const existingId = await Patient.findOne({ 
-        clinicId: req.user.clinicId, 
-        patientId: customPatientId.trim() 
-      });
-
-      if (existingId) {
-        return res.status(400).json({ message: `Patient ID '${customPatientId}' is already in use. Please use a unique ID.` });
-      }
-
+      const existingId = await Patient.findOne({ clinicId: req.user.clinicId, patientId: customPatientId.trim() });
+      if (existingId) return res.status(400).json({ message: `Patient ID '${customPatientId}' is already in use.` });
       finalPatientId = customPatientId.trim();
-
     } else {
-      // SCENARIO 2: No ID provided. Auto-generate the next sequential ID.
-      // We search the entire CLINIC for the last auto-generated ID (format: PID-XXXX)
-      const lastPatient = await Patient.findOne({ 
-          clinicId: req.user.clinicId,
-          patientId: { $regex: /^PID-\d+$/ } // Only look at our auto-generated format
-        })
+      const lastPatient = await Patient.findOne({ clinicId: req.user.clinicId, patientId: { $regex: /^PID-\d+$/ } })
         .sort({ patientId: -1 })
         .collation({ locale: "en_US", numericOrdering: true });
 
       let nextId = 1001;
-
       if (lastPatient && lastPatient.patientId) {
         const lastIdStr = lastPatient.patientId.replace('PID-', '');
         const lastIdNum = parseInt(lastIdStr);
-        if (!isNaN(lastIdNum)) {
-          nextId = lastIdNum + 1;
-        }
+        if (!isNaN(lastIdNum)) nextId = lastIdNum + 1;
       }
-
       finalPatientId = `PID-${nextId}`;
     }
 
-    // --- CREATE PATIENT ---
     const patient = await Patient.create({
-      clinicId: req.user.clinicId,
-      branchId: req.branchId, // <--- CRITICAL: Assign to Active Branch
-      patientId: finalPatientId, //  Use the determined ID
-      fullName,
-      age,
-      gender,
-      mobile,
-      bloodGroup,
-      emergencyContact,
-      emergencyRelation,
-      assignedDoctor,
-      referredBy,
-      communication,
-      primaryConcern,
-      painLevel,
-      medicalConditions,
-      notes,
-      attachments
+      clinicId: req.user.clinicId, branchId: req.branchId, patientId: finalPatientId, 
+      fullName, age, gender, mobile, bloodGroup, emergencyContact, emergencyRelation, assignedDoctor, referredBy, communication,
+      primaryConcern, painLevel, medicalConditions, notes,
+      specialtyData: specialtyData || {},
+      attachments: attachments || { photo: '', scans: [], documents: [] }
+    });
+
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'CREATE_PATIENT', entity: 'Patient', entityId: patient._id,
+      details: `Created new patient profile for ${patient.fullName} (${patient.patientId})`
     });
 
     res.status(201).json({
-      _id: patient._id,
-      patientId: patient.patientId,
-      fullName: patient.fullName,
-      branchId: patient.branchId,
-      message: 'Patient registered successfully!'
+      _id: patient._id, patientId: patient.patientId, fullName: patient.fullName, branchId: patient.branchId, message: 'Patient registered successfully!'
     });
-
   } catch (error) {
-    console.error("Error creating patient:", error);
-    if (error.code === 11000) {
-      return res.status(400).json({ message: 'Error generating ID. Please try again.' });
-    }
+    if (error.code === 11000) return res.status(400).json({ message: 'Error generating ID. Please try again.' });
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Delete patient
 const deletePatient = async (req, res) => {
   try {
     const { id } = req.params;
-
-    // 1. Construct Secure Query (Clinic + Branch)
-    let query = {
-      clinicId: req.user.clinicId,
-      branchId: req.branchId // <--- LOCK DELETE TO BRANCH
-    };
-
-    if (id.startsWith('PID-')) {
-      query.patientId = id;
-    } else {
-      query._id = id;
-    }
+    let query = { clinicId: req.user.clinicId, branchId: req.branchId };
+    if (id.startsWith('PID-')) query.patientId = id; else query._id = id;
 
     const patient = await Patient.findOne(query);
+    if (!patient) return res.status(404).json({ message: 'Patient not found or access denied' });
 
-    if (!patient) {
-      return res.status(404).json({ message: 'Patient not found or access denied' });
-    }
+    const patientName = patient.fullName;
+    const patientDisplayId = patient.patientId;
+    const patientMongoId = patient._id;
 
     await patient.deleteOne();
 
-    res.json({ message: 'Patient record deleted successfully' });
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'DELETE_PATIENT', entity: 'Patient', entityId: patientMongoId,
+      details: `Permanently deleted patient ${patientName} (${patientDisplayId})`
+    });
 
+    res.json({ message: 'Patient record deleted successfully' });
   } catch (error) {
     console.error("Error deleting patient:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Get all patients (Scoped to Active Branch)
-// @route   GET /api/patients
-// @access  Private
 const getPatients = async (req, res) => {
   try {
-    // 1. Capture Query Parameters
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const search = req.query.search || '';
     const doctor = req.query.doctor || '';
-    const filterTab = req.query.filter || 'all'; // 'all', 'due', 'active'
-
-    // Use provided branchId filter, or fallback to the user's current active branch
+    const filterTab = req.query.filter || 'all'; 
     const branchId = req.query.branchId || req.branchId;
 
-    // 2. Build the MongoDB Query Object
-    let query = {
-      clinicId: req.user.clinicId,
-      branchId: branchId
-    };
+    let query = { clinicId: req.user.clinicId, branchId: branchId };
 
-    // A. Search by Name, Phone, or Patient ID
     if (search) {
       query.$or = [
         { fullName: { $regex: search, $options: 'i' } },
@@ -197,169 +226,112 @@ const getPatients = async (req, res) => {
       ];
     }
 
-    // B. Filter by Assigned Doctor
-    if (doctor) {
-      query.assignedDoctor = doctor;
-    }
+    if (doctor) query.assignedDoctor = doctor;
 
-    // C. Tab Filters (Active / Dues)
     if (filterTab === 'active') {
       query.isActive = true;
     } else if (filterTab === 'due') {
-      // MongoDB expression: totalCost - totalPaid > 0
       query.$expr = { $gt: [{ $subtract: [{ $ifNull: ["$totalCost", 0] }, { $ifNull: ["$totalPaid", 0] }] }, 0] };
     }
 
-    // 3. Execute Paginated Query
     const skip = (page - 1) * limit;
 
-    const patients = await Patient.find(query)
-      .sort({ updatedAt: -1 }) // Newest first
-      .skip(skip)
-      .limit(limit);
-
-    // 4. Get Total Count for Pagination UI
+    const patients = await Patient.find(query).sort({ updatedAt: -1 }).skip(skip).limit(limit);
     const total = await Patient.countDocuments(query);
-
     const globalTotal = await Patient.countDocuments({ clinicId: req.user.clinicId, branchId: branchId });
     const globalPending = await Patient.countDocuments({
-      clinicId: req.user.clinicId,
-      branchId: branchId,
+      clinicId: req.user.clinicId, branchId: branchId,
       $expr: { $gt: [{ $subtract: [{ $ifNull: ["$totalCost", 0] }, { $ifNull: ["$totalPaid", 0] }] }, 0] }
     });
 
-    res.json({
-      patients,
-      totalPages: Math.ceil(total / limit),
-      currentPage: page,
-      totalCount: total,
-      globalTotal,      //  Send to frontend
-      globalPending     //  Send to frontend
-    });
-
+    res.json({ patients, totalPages: Math.ceil(total / limit), currentPage: page, totalCount: total, globalTotal, globalPending });
   } catch (error) {
     console.error("Fetch Patients Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Get single patient by ID (Secure)
-// @route   GET /api/patients/:id
 const getPatientById = async (req, res) => {
   try {
     const { id } = req.params;
+    let query = { clinicId: req.user.clinicId, branchId: req.branchId };
 
-    // Base Security Filter: Clinic + Branch
-    let query = {
-      clinicId: req.user.clinicId,
-      branchId: req.branchId
-    };
+    if (id.startsWith('PID-')) query.patientId = id;
+    else if (mongoose.Types.ObjectId.isValid(id)) query._id = id;
+    else return res.status(400).json({ message: 'Invalid Patient ID format' });
 
-    if (id.startsWith('PID-')) {
-      query.patientId = id;
-    } else if (mongoose.Types.ObjectId.isValid(id)) {
-      query._id = id;
-    } else {
-      return res.status(400).json({ message: 'Invalid Patient ID format' });
-    }
-
-    //  FIXED: Added .lean() so we can attach new data to the Mongoose object
     const patient = await Patient.findOne(query).lean();
 
     if (patient) {
-      //  FIXED: Fetch all appointments for this specific patient
-      const appointments = await Appointment.find({ 
-        clinicId: req.user.clinicId,
-        patientId: patient._id 
-      }).sort({ start: 1 }).lean();
-
-      const invoices = await Invoice.find({ 
-          clinicId: req.user.clinicId, 
-          patientId: patient._id 
-      }).sort({ createdAt: -1 }).lean();
-
-      // Attach the appointments array to the patient object
+      const appointments = await Appointment.find({ clinicId: req.user.clinicId, patientId: patient._id }).sort({ start: 1 }).lean();
+      const invoices = await Invoice.find({ clinicId: req.user.clinicId, patientId: patient._id }).sort({ createdAt: -1 }).lean();
       patient.appointments = appointments;
       patient.invoices = invoices;
-
       res.json(patient);
     } else {
       res.status(404).json({ message: 'Patient not found in this branch' });
     }
-
   } catch (error) {
     console.error("Error fetching patient details:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Update a specific tooth's condition (Missing, Decayed, Clear)
-const updateToothCondition = async (req, res) => {
+const updateSpecialtyDataKey = async (req, res) => {
   try {
     const { id } = req.params;
-    const { tooth, condition } = req.body;
+    const { key, value } = req.body; 
 
-    //  FIXED: Smart Query to handle both 'PID-1001' and Mongo ObjectIds
-    let query = {
-      clinicId: req.user.clinicId,
-      branchId: req.branchId
-    };
-
-    if (id.startsWith('PID-')) {
-      query.patientId = id; // Search your custom string field
-    } else {
-      query._id = id;       // Search the Mongo ObjectId field
-    }
+    let query = { clinicId: req.user.clinicId, branchId: req.branchId };
+    if (id.startsWith('PID-')) query.patientId = id; else query._id = id;
 
     const patient = await Patient.findOne(query);
-
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
-    // If 'clear' or 'healthy', remove it from the map. Otherwise, set it.
-    if (!condition || condition === 'healthy' || condition === 'clear') {
-      patient.dentalChart.delete(tooth.toString());
+    if (!patient.specialtyData) patient.specialtyData = {};
+
+    if (!value || value === 'healthy' || value === 'clear') {
+      delete patient.specialtyData[key];
     } else {
-      patient.dentalChart.set(tooth.toString(), condition);
+      patient.specialtyData[key] = value;
     }
 
+    patient.markModified('specialtyData');
     await patient.save();
     
-    // We must populate appointments before returning so the frontend doesn't break
-    const Appointment = require('../models/Appointment');
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'UPDATE_CLINICAL_DATA', entity: 'Patient', entityId: patient._id,
+      details: `Updated specialty finding for Region/Key: ${key}`
+    });
+    
     const appointments = await Appointment.find({ patientId: patient._id }).lean();
     const patientObj = patient.toObject();
     patientObj.appointments = appointments;
 
     res.json(patientObj);
   } catch (error) {
-    console.error("Tooth Update Error:", error);
+    console.error("Specialty Data Update Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Add Treatment (Secure)
 const addTreatment = async (req, res) => {
   try {
     const { id } = req.params;
-    const { tooth, procedure, cost, status } = req.body;
+    const { region, tooth, procedure, cost, status, notes } = req.body; 
 
-    let query = {
-      clinicId: req.user.clinicId,
-      branchId: req.branchId
-    };
-    if (id.startsWith('PID-')) query.patientId = id;
-    else query._id = id;
+    let query = { clinicId: req.user.clinicId, branchId: req.branchId };
+    if (id.startsWith('PID-')) query.patientId = id; else query._id = id;
 
     const patient = await Patient.findOne(query);
-
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
     const newTreatment = {
-      tooth,
-      procedure,
-      cost: Number(cost),
-      status: status || 'Proposed'
+      region: region || tooth || 'General',
+      procedure, cost: Number(cost), status: status || 'Proposed', notes: notes || ''
     };
+    
     patient.treatmentPlan.push(newTreatment);
 
     if (status === 'In Progress' || status === 'Completed') {
@@ -368,35 +340,31 @@ const addTreatment = async (req, res) => {
     }
 
     await patient.save();
-    res.status(201).json(patient);
 
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'ADD_TREATMENT', entity: 'Patient', entityId: patient._id,
+      details: `Added treatment: ${procedure} (₹${cost}) to ${newTreatment.region}`
+    });
+
+    res.status(201).json(patient);
   } catch (error) {
     console.error("Error adding treatment:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Start Treatment (Secure)
 const startTreatment = async (req, res) => {
   try {
     const { id } = req.params;
-
-    let query = {
-      clinicId: req.user.clinicId,
-      branchId: req.branchId
-    };
-    if (id.startsWith('PID-')) query.patientId = id;
-    else query._id = id;
+    let query = { clinicId: req.user.clinicId, branchId: req.branchId };
+    if (id.startsWith('PID-')) query.patientId = id; else query._id = id;
 
     const patient = await Patient.findOne(query);
-
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
     const proposedItems = patient.treatmentPlan.filter(item => item.status === 'Proposed');
-
-    if (proposedItems.length === 0) {
-      return res.status(400).json({ message: 'No proposed treatments to start.' });
-    }
+    if (proposedItems.length === 0) return res.status(400).json({ message: 'No proposed treatments to start.' });
 
     let addedCost = 0;
     patient.treatmentPlan.forEach(item => {
@@ -408,52 +376,48 @@ const startTreatment = async (req, res) => {
 
     patient.totalCost = (patient.totalCost || 0) + addedCost;
     patient.walletBalance = patient.totalCost - (patient.totalPaid || 0);
-
     await patient.save();
 
-    res.json({
-      message: `${proposedItems.length} treatments started`,
-      patient
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'START_TREATMENT', entity: 'Patient', entityId: patient._id,
+      details: `Started ${proposedItems.length} proposed treatment(s)`
     });
 
+    res.json({ message: `${proposedItems.length} treatments started`, patient });
   } catch (error) {
     console.error("Error starting treatment:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Update Treatment Status (Secure)
 const updateTreatmentStatus = async (req, res) => {
   try {
     const { id, itemId } = req.params;
     const { status } = req.body;
 
-    const patient = await Patient.findOne({
-      patientId: id,
-      clinicId: req.user.clinicId,
-      branchId: req.branchId // <--- CRITICAL
-    });
-
-    if (!patient) {
-      return res.status(404).json({ message: 'Patient not found' });
-    }
+    const patient = await Patient.findOne({ patientId: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
     const treatment = patient.treatmentPlan.id(itemId);
-    if (!treatment) {
-      return res.status(404).json({ message: 'Treatment item not found' });
-    }
+    if (!treatment) return res.status(404).json({ message: 'Treatment item not found' });
 
+    const oldStatus = treatment.status;
     treatment.status = status;
 
-    if (status === 'Proposed') {
-      treatment.completedDate = undefined;
-    } else if (status === 'Completed') {
-      treatment.completedDate = new Date();
-    }
+    if (status === 'Proposed') treatment.completedDate = undefined;
+    else if (status === 'Completed') treatment.completedDate = new Date();
+    
     recalculateTotalCost(patient);
     await patient.save();
-    res.json(patient);
 
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'UPDATE_TREATMENT_STATUS', entity: 'Patient', entityId: patient._id,
+      details: `Changed treatment '${treatment.procedure}' status from ${oldStatus} to ${status}`
+    });
+
+    res.json(patient);
   } catch (error) {
     console.error("Update Error:", error);
     res.status(500).json({ message: 'Server Error' });
@@ -462,38 +426,33 @@ const updateTreatmentStatus = async (req, res) => {
 
 const recalculateTotalCost = (patient) => {
   patient.totalCost = patient.treatmentPlan.reduce((total, item) => {
-    if (item.status === 'Completed' || item.status === 'In Progress') {
-      return total + (item.cost || 0);
-    }
+    if (item.status === 'Completed' || item.status === 'In Progress') return total + (item.cost || 0);
     return total;
   }, 0);
 };
 
-// @desc    Delete Treatment (Secure)
 const deleteTreatment = async (req, res) => {
   try {
     const { id, itemId } = req.params;
-
-    const patient = await Patient.findOne({
-      patientId: id,
-      clinicId: req.user.clinicId,
-      branchId: req.branchId // <--- CRITICAL
-    });
-
-    if (!patient) {
-      return res.status(404).json({ message: 'Patient not found' });
-    }
+    const patient = await Patient.findOne({ patientId: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
     const treatment = patient.treatmentPlan.id(itemId);
-    if (!treatment) {
-      return res.status(404).json({ message: 'Treatment item not found' });
-    }
+    if (!treatment) return res.status(404).json({ message: 'Treatment item not found' });
 
+    const procedureName = treatment.procedure;
     patient.treatmentPlan.pull(itemId);
+    
     recalculateTotalCost(patient);
     await patient.save();
-    res.json(patient);
 
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'DELETE_TREATMENT', entity: 'Patient', entityId: patient._id,
+      details: `Deleted treatment plan item: ${procedureName}`
+    });
+
+    res.json(patient);
   } catch (error) {
     console.error("Delete Error:", error);
     res.status(500).json({ message: 'Server Error' });
@@ -504,179 +463,136 @@ const updatePatient = async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
+    const query = { _id: id, clinicId: req.user.clinicId, branchId: req.branchId };
+    
+    delete updates._id; delete updates.clinicId; delete updates.branchId; delete updates.patientId; delete updates.createdAt;
 
-    // 1. Security Check: Ensure the patient belongs to the user's Clinic AND Branch
-    const query = {
-      _id: id,
-      clinicId: req.user.clinicId,
-      branchId: req.branchId
-    };
+    const patient = await Patient.findOne(query);
+    if (!patient) return res.status(404).json({ message: 'Patient not found or access denied' });
 
-    // 2. Prevent updating immutable fields
-    // We remove these fields from the update object so they can't be tampered with
-    delete updates._id;
-    delete updates.clinicId;
-    delete updates.branchId;
-    delete updates.patientId; // Usually we don't allow changing the ID
-    delete updates.createdAt;
-
-    // 3. Perform the Update
-    const patient = await Patient.findOneAndUpdate(
-      query,
-      { $set: updates },
-      { new: true, runValidators: true } // Return the updated doc & validate data
-    );
-
-    if (!patient) {
-      return res.status(404).json({ message: 'Patient not found or access denied' });
+    if (updates.specialtyData) {
+      patient.specialtyData = { ...patient.specialtyData, ...updates.specialtyData };
+      patient.markModified('specialtyData');
+      delete updates.specialtyData;
     }
 
-    res.json(patient);
+    Object.assign(patient, updates);
+    await patient.save();
 
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'UPDATE_PATIENT', entity: 'Patient', entityId: patient._id,
+      details: `Updated demographic or clinical profile information`
+    });
+
+    res.json(patient);
   } catch (error) {
     console.error("Error updating patient:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-// @desc    Upload Patient Attachment (Photo or X-Ray)
-// @route   POST /api/patients/:id/upload
 const uploadAttachment = async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
-    }
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
 
     const { id } = req.params;
-    const { type } = req.body; // 'photo' or 'xray'
-
-    // 1. Find Patient (Secure)
-    const patient = await Patient.findOne({
-      _id: id,
-      clinicId: req.user.clinicId,
-      branchId: req.branchId
-    });
+    const { type } = req.body; 
+    const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
 
     if (!patient) {
-      // Clean up the uploaded file if patient not found
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ message: 'Patient not found' });
     }
 
-    // 2. Construct File Path (Store relative path in DB)
-    // Assuming you serve static files from a 'uploads' folder
     const filePath = `/uploads/${req.file.filename}`;
+    if (!patient.attachments) patient.attachments = { photo: '', scans: [], documents: [] };
 
-    // 3. Update Patient Data
-    if (type === 'photo') {
-      // If replacing profile photo, you might want to delete the old file here
-      patient.attachments.photo = filePath;
+    if (type === 'photo') patient.attachments.photo = filePath;
+    else if (type === 'document') {
+      if (!patient.attachments.documents) patient.attachments.documents = [];
+      patient.attachments.documents.push(filePath);
     } else {
-      // Default to X-Ray/Document array
-      // Initialize array if it doesn't exist
-      if (!patient.attachments) patient.attachments = { xrays: [] };
-      if (!patient.attachments.xrays) patient.attachments.xrays = [];
-
-      patient.attachments.xrays.push(filePath);
+      if (!patient.attachments.scans) patient.attachments.scans = [];
+      patient.attachments.scans.push(filePath);
     }
 
     await patient.save();
 
-    res.json({
-      message: 'File uploaded successfully',
-      filePath,
-      attachments: patient.attachments
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'UPLOAD_FILE_LOCAL', entity: 'Patient', entityId: patient._id,
+      details: `Uploaded new ${type} to local storage`
     });
 
+    res.json({ message: 'File uploaded successfully', filePath, attachments: patient.attachments });
   } catch (error) {
     console.error("Upload Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-
 const deleteAttachment = async (req, res) => {
   try {
     const { id } = req.params;
-    const { fileUrl } = req.body; // Expecting the relative path like "/uploads/file-123.jpg"
+    const { fileUrl } = req.body; 
 
     if (!fileUrl) return res.status(400).json({ message: 'File URL is required' });
-
-    // 1. Find the Patient
-    const patient = await Patient.findOne({
-      _id: id,
-      clinicId: req.user.clinicId,
-      branchId: req.branchId
-    });
-
+    const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
-    // 2. Remove from Database Array
-    // We filter out the matching URL
-    if (patient.attachments && patient.attachments.xrays) {
-      patient.attachments.xrays = patient.attachments.xrays.filter(url => url !== fileUrl);
+    if (patient.attachments) {
+      if (patient.attachments.scans) patient.attachments.scans = patient.attachments.scans.filter(url => url !== fileUrl);
+      if (patient.attachments.documents) patient.attachments.documents = patient.attachments.documents.filter(url => url !== fileUrl);
+      if (patient.attachments.photo === fileUrl) patient.attachments.photo = "";
     }
-
-    // Also check 'photo' if it matches
-    if (patient.attachments.photo === fileUrl) {
-      patient.attachments.photo = "";
-    }
-
     await patient.save();
 
-    // 3. Delete from Server Disk (File System)
-    // Construct the absolute path: e.g., C:\Projects\DentalApp\backend\uploads\file-123.jpg
-    // NOTE: Adjust '..' segments based on where this controller file is located relative to root
     const absolutePath = path.join(__dirname, '..', '..', fileUrl);
+    if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath); 
 
-    if (fs.existsSync(absolutePath)) {
-      fs.unlinkSync(absolutePath); // This deletes the file
-      console.log(`Deleted file: ${absolutePath}`);
-    } else {
-      console.warn(`File not found on disk: ${absolutePath}`);
-    }
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'DELETE_FILE_LOCAL', entity: 'Patient', entityId: patient._id,
+      details: `Deleted a file from local storage`
+    });
 
     res.json({ message: 'File deleted successfully', attachments: patient.attachments });
-
   } catch (error) {
     console.error("Delete Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
 
-
 const bulkCompleteTreatments = async (req, res) => {
   try {
     const { id } = req.params;
-    const { treatmentIds } = req.body; // Array of treatment _ids from the modal
+    const { treatmentIds } = req.body; 
 
-    // 1. Find the patient
     const patient = await Patient.findById(id);
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
-    if (!patient) {
-      return res.status(404).json({ message: 'Patient not found' });
-    }
-
-    // 2. Loop through their treatment plan and update the matching IDs
     let isModified = false;
-
     patient.treatmentPlan.forEach(treatment => {
-      // Convert ObjectIds to strings for safe comparison
       if (treatmentIds.includes(treatment._id.toString())) {
         treatment.status = 'Completed';
         isModified = true;
       }
     });
 
-    // 3. Save the patient if changes were made
     if (isModified) {
-      // Mongoose needs to know the array was modified
       patient.markModified('treatmentPlan');
+      recalculateTotalCost(patient); 
       await patient.save();
+      
+      //  AUDIT LOG
+      logAudit({
+        req, action: 'BULK_COMPLETE_TREATMENT', entity: 'Patient', entityId: patient._id,
+        details: `Marked ${treatmentIds.length} treatment(s) as Completed simultaneously`
+      });
     }
 
     res.json({ message: 'Treatments marked as completed', patient });
-
   } catch (error) {
     console.error("Bulk Complete Treatments Error:", error);
     res.status(500).json({ message: 'Server Error' });
@@ -684,6 +600,7 @@ const bulkCompleteTreatments = async (req, res) => {
 };
 
 module.exports = {
+  scanIntakeForm,
   createPatient,
   getPatients,
   getPatientById,
@@ -696,5 +613,8 @@ module.exports = {
   uploadAttachment,
   deleteAttachment,
   bulkCompleteTreatments,
-  updateToothCondition
+  updateSpecialtyDataKey,
+  getCloudUploadUrl,
+  saveAttachmentUrl,
+  deleteCloudAttachment
 };

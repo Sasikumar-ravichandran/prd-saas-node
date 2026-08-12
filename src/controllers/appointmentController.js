@@ -1,6 +1,9 @@
 const Appointment = require('../models/Appointment');
 const { dispatchWhatsAppEvent } = require('../services/whatsappService');
 
+//  IMPORT THE AUDIT LOGGER
+const logAudit = require('../utils/auditLogger'); // Ensure this matches your actual path!
+
 const formatApptTime = (dateString) => {
   if (!dateString) return '';
   return new Date(dateString).toLocaleString('en-IN', {
@@ -15,7 +18,7 @@ const getAppointments = async (req, res) => {
     // SECURITY: Only fetch appointments for this clinic AND this branch
     const appointments = await Appointment.find({
       clinicId: req.user.clinicId,
-      branchId: req.branchId // <--- FILTER BY BRANCH
+      branchId: req.branchId 
     });
     res.json(appointments);
   } catch (error) {
@@ -32,34 +35,41 @@ const createAppointment = async (req, res) => {
       title, patientId, phone, docId, doc, type, start, end, resourceId, status
     } = req.body;
 
-    // Basic Validation
     if (!patientId || !docId || !start || !end) {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
     const appointment = await Appointment.create({
       clinicId: req.user.clinicId,
-      branchId: req.branchId, // <--- BIND TO ACTIVE BRANCH
+      branchId: req.branchId, 
       patientId,
       title,
       phone,
-      doctorId: docId,   // Map frontend 'docId' to DB 'doctorId'
-      doctorName: doc,   // Map frontend 'doc' to DB 'doctorName'
+      doctorId: docId,  
+      doctorName: doc,  
       type,
       start,
       end,
       resourceId,
       status: status || 'Scheduled'
     });
+
     if (phone) {
       dispatchWhatsAppEvent(req.user.clinicId, 'appointment_booked', phone, {
-        patientName: title.split('-')[0].trim() || 'Patient', // Assuming title has patient name
+        patientName: title.split('-')[0].trim() || 'Patient', 
         time: formatApptTime(start),
         treatment: type || 'Consultation',
         doctorName: doc || 'your doctor',
-        clinicName: "Our Clinic" // Replace with req.user.clinicName if available in your auth payload
+        clinicName: "Our Clinic" // Replace with req.user.clinicName if available
       });
     }
+
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'CREATE_APPOINTMENT', entity: 'Appointment', entityId: appointment._id,
+      details: `Booked new appointment for ${title.split('-')[0].trim()} with Dr. ${doc}`
+    });
+
     res.status(201).json(appointment);
 
   } catch (error) {
@@ -75,19 +85,20 @@ const updateAppointment = async (req, res) => {
     const { id } = req.params;
     const { start, end, resourceId, title, docId, type, status } = req.body;
 
-    // 1. Find Appointment (Ensure it belongs to this clinic AND branch)
-    // This prevents a user from editing an appointment ID that belongs to another branch
     let appointment = await Appointment.findOne({
       _id: id,
       clinicId: req.user.clinicId,
-      branchId: req.branchId // <--- SECURITY CHECK
+      branchId: req.branchId // SECURITY CHECK
     });
 
     if (!appointment) {
       return res.status(404).json({ message: 'Appointment not found in this branch' });
     }
 
-    // 2. Update Fields (Only update what is sent)
+    //  BUG FIX: Calculate if the time actually changed before updating
+    const isRescheduled = start && new Date(start).getTime() !== new Date(appointment.start).getTime();
+
+    // 2. Update Fields
     if (start) appointment.start = start;
     if (end) appointment.end = end;
     if (resourceId) appointment.resourceId = resourceId;
@@ -97,6 +108,7 @@ const updateAppointment = async (req, res) => {
     if (status) appointment.status = status;
 
     await appointment.save();
+
     if (isRescheduled && appointment.phone) {
       dispatchWhatsAppEvent(req.user.clinicId, 'appointment_rescheduled', appointment.phone, {
         patientName: appointment.title.split('-')[0].trim(),
@@ -105,6 +117,16 @@ const updateAppointment = async (req, res) => {
         clinicName: "Our Clinic"
       });
     }
+
+    //  AUDIT LOG
+    logAudit({
+      req, action: isRescheduled ? 'RESCHEDULE_APPOINTMENT' : 'UPDATE_APPOINTMENT', 
+      entity: 'Appointment', entityId: appointment._id,
+      details: isRescheduled 
+        ? `Rescheduled appointment for ${appointment.title.split('-')[0].trim()} to ${formatApptTime(start)}`
+        : `Updated appointment details for ${appointment.title.split('-')[0].trim()}`
+    });
+
     res.json(appointment);
 
   } catch (error) {
@@ -119,16 +141,16 @@ const deleteAppointment = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // SECURITY: Ensure we only delete from the active branch
     const appointment = await Appointment.findOneAndDelete({
       _id: id,
       clinicId: req.user.clinicId,
-      branchId: req.branchId // <--- SECURITY CHECK
+      branchId: req.branchId // SECURITY CHECK
     });
 
     if (!appointment) {
       return res.status(404).json({ message: 'Appointment not found or access denied' });
     }
+
     if (appointment.phone) {
       dispatchWhatsAppEvent(req.user.clinicId, 'appointment_cancelled', appointment.phone, {
         patientName: appointment.title.split('-')[0].trim(),
@@ -137,6 +159,12 @@ const deleteAppointment = async (req, res) => {
       });
     }
 
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'DELETE_APPOINTMENT', entity: 'Appointment', entityId: appointment._id,
+      details: `Cancelled and deleted appointment for ${appointment.title.split('-')[0].trim()}`
+    });
+
     res.json({ message: 'Appointment removed' });
   } catch (error) {
     console.error("Error deleting appointment:", error);
@@ -144,20 +172,22 @@ const deleteAppointment = async (req, res) => {
   }
 };
 
+// @desc    Update appointment status
+// @route   PATCH /api/appointments/:id/status
 const updateAppointmentStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body; // Expects 'In Progress', 'Completed', or 'Cancelled'
+    const { status } = req.body; 
 
-    // Find the appointment and update ONLY the status
-    const appointment = await Appointment.findByIdAndUpdate(
-      id,
+    //  BUG FIX: Added clinicId and branchId to prevent IDOR attacks
+    const appointment = await Appointment.findOneAndUpdate(
+      { _id: id, clinicId: req.user.clinicId, branchId: req.branchId },
       { status: status },
-      { new: true } // Returns the updated document
+      { new: true } 
     );
 
     if (!appointment) {
-      return res.status(404).json({ message: 'Appointment not found' });
+      return res.status(404).json({ message: 'Appointment not found or access denied' });
     }
 
     if (appointment.phone) {
@@ -175,6 +205,12 @@ const updateAppointmentStatus = async (req, res) => {
         });
       }
     }
+
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'UPDATE_APPOINTMENT_STATUS', entity: 'Appointment', entityId: appointment._id,
+      details: `Marked appointment for ${appointment.title.split('-')[0].trim()} as ${status}`
+    });
 
     res.json(appointment);
   } catch (error) {

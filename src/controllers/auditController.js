@@ -8,26 +8,20 @@ const getAuditLogs = async (req, res) => {
             return res.json([]);
         }
 
-        // 1. Construct the Query
+        // 1. Construct the Query (Ensures Clinic A never sees Clinic B's logs)
         const query = { 
             clinicId: req.user.clinicId 
         };
 
         // 2. BRANCH FILTERING LOGIC
-        // If the user is a "Super Admin" (Clinic Owner), let them see ALL logs.
-        // If they are a Branch Manager/Staff, force the branch filter.
-        
-        // Option A: Strict Mode (Recommended) - Always filter by active branch context
-        // This is less confusing because the UI reflects the current branch header.
-        query.branchId = req.branchId; 
-
-        // Option B: Hybrid Mode (Optional)
-        // if (req.user.role !== 'Administrator') {
-        //    query.branchId = req.branchId;
-        // }
+        // Only show logs for the branch the user is currently viewing
+        if (req.branchId) {
+            query.branchId = req.branchId;
+        }
 
         const logs = await AuditLog.find(query)
-            .populate('actorId', 'name role') // Useful to see WHO did it
+            //  FIXED: Changed 'actorId' to 'userId' and fetched 'fullName'
+            .populate('userId', 'fullName role') 
             .sort({ createdAt: -1 })
             .limit(100);
 

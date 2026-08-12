@@ -4,20 +4,20 @@ const Procedure = require('../models/Procedure');
 // @route   GET /api/procedures
 // @access  Private
 const getProcedures = async (req, res) => {
-	try {
-		if (!req.user || !req.user.clinicId) {
-			return res.json([]);
-		}
+    try {
+        if (!req.user || !req.user.clinicId) {
+            return res.json([]);
+        }
 
-		const procedures = await Procedure.find({
-			clinicId: req.user.clinicId
-		})
-			.sort({ category: 1, code: 1 }); // Sorted by Category first, then Code
+        const procedures = await Procedure.find({
+            clinicId: req.user.clinicId
+        })
+            .sort({ category: 1, code: 1 }); // Sorted by Category first, then Code
 
-		res.json(procedures);
-	} catch (error) {
-		res.status(500).json({ message: 'Server Error' });
-	}
+        res.json(procedures);
+    } catch (error) {
+        res.status(500).json({ message: 'Server Error' });
+    }
 };
 
 // @desc    Create a new procedure
@@ -25,7 +25,6 @@ const getProcedures = async (req, res) => {
 // @access  Private
 const createProcedure = async (req, res) => {
     try {
-        //  UPDATED: Added labCost & category, Removed commission
         const { code, name, price, labCost, category, active } = req.body;
 
         // Check for duplicates
@@ -44,9 +43,10 @@ const createProcedure = async (req, res) => {
             name,
             price,
             
-            //  NEW FIELDS
+            // NEW FIELDS
             labCost: labCost || 0, 
-            category: category || 'General',
+            // TWEAK: Changed fallback from 'General' to 'Uncategorized' to be truly agnostic
+            category: category || 'Uncategorized',
 
             isActive: active !== undefined ? active : true
         });
@@ -78,7 +78,7 @@ const updateProcedure = async (req, res) => {
         if (req.body.name) procedure.name = req.body.name;
         if (req.body.price !== undefined) procedure.price = req.body.price;
 
-        //  NEW FIELDS UPDATES
+        // NEW FIELDS UPDATES
         if (req.body.labCost !== undefined) procedure.labCost = req.body.labCost;
         if (req.body.category) procedure.category = req.body.category;
 

@@ -4,10 +4,18 @@ const User = require('../models/User');
 const protect = async (req, res, next) => {
   let token;
 
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+  // 1. PRIMARY: Try to get the token from the HttpOnly Cookie
+  if (req.cookies && req.cookies.token) {
+    token = req.cookies.token;
+  } 
+  // 2. FALLBACK: Check Authorization header
+  else if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (token) {
     try {
-      // 1. Verify Token
-      token = req.headers.authorization.split(' ')[1];
+      // 3. Verify Token
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret123');
       
       // Get user and populate essential fields for the security check
@@ -17,11 +25,11 @@ const protect = async (req, res, next) => {
         return res.status(401).json({ message: 'User not found' });
       }
 
-      // 2. ATTACH CLINIC ID (The Global Tenant)
+      // 4. ATTACH CLINIC ID (The Global Tenant)
       // Controllers should use this to ensure Clinic A never sees Clinic B data
       req.clinicId = req.user.clinicId;
 
-      // 3. HANDLE BRANCH CONTEXT (The Location Tenant)
+      // 5. HANDLE BRANCH CONTEXT (The Location Tenant)
       const activeBranchId = req.headers['x-branch-id'];
 
       if (activeBranchId) {
@@ -60,7 +68,7 @@ const adminOnly = (req, res, next) => {
   if (req.user && (req.user.role === 'Administrator' || req.user.role === 'Admin')) {
     next();
   } else {
-    res.status(403).json({ message: 'Access denied. Administrator privileges required.3' });
+    res.status(403).json({ message: 'Access denied. Administrator privileges required.' });
   }
 };
 

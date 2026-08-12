@@ -3,17 +3,34 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Clinic = require('../models/Clinic');
 const RoleConfig = require('../models/RoleConfig');
-const Branch = require('../models/Branch');
 const Otp = require('../models/Otp');
-
 const { sendEmail, getOtpEmailTemplate } = require('../services/emailService');
-// Generate JWT
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'secret123azb', { expiresIn: '30d' });
-};
+
+// ==========================================
+// SECURITY & TOKEN HELPERS
+// ==========================================
 
 // Helper: SHA-256 OTP Hasher
 const hashOtp = (otp) => crypto.createHash('sha256').update(otp).digest('hex');
+
+// Helper: Generate JWT and attach it to an HttpOnly Secure Cookie
+const sendTokenResponse = (userPayload, statusCode, res) => {
+  const token = jwt.sign({ id: userPayload._id }, process.env.JWT_SECRET || 'secret123azb', {
+    expiresIn: '30d',
+  });
+
+  const options = {
+    httpOnly: true, // Invisible to JavaScript (Prevents XSS Attacks)
+    secure: process.env.NODE_ENV === 'production', // True on HTTPS
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax', // Prevents CSRF
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 Days
+  };
+
+  res
+    .status(statusCode)
+    .cookie('token', token, options)
+    .json({ ...userPayload, token }); // ⚠️ Keeping token in JSON temporarily to prevent breaking old Redux code
+};
 
 // ==========================================
 // @desc    Send OTP to Email (For Signup or Reset Password)
@@ -23,18 +40,14 @@ const sendOtp = async (req, res) => {
   try {
     const { email, purpose } = req.body;
 
-    if (!email || !purpose) {
-      return res.status(400).json({ message: 'Email and purpose are required.' });
-    }
+    if (!email || !purpose) return res.status(400).json({ message: 'Email and purpose are required.' });
 
     const cleanEmail = email.toLowerCase().trim();
-
-    // 1. Validate email format
     if (!/^\S+@\S+\.\S+$/.test(cleanEmail)) {
       return res.status(400).json({ message: 'Please provide a valid email address.' });
     }
 
-    // 2. Prevent OTP Resend Spam (60-second cooldown check)
+    // Prevent OTP Resend Spam
     const recentOtp = await Otp.findOne({ 
       email: cleanEmail, 
       purpose,
@@ -43,53 +56,37 @@ const sendOtp = async (req, res) => {
 
     if (recentOtp) {
       const secondsLeft = Math.ceil((60 * 1000 - (Date.now() - recentOtp.createdAt)) / 1000);
-      return res.status(429).json({ 
-        message: `Please wait ${secondsLeft} seconds before requesting another code.` 
-      });
+      return res.status(429).json({ message: `Please wait ${secondsLeft} seconds before requesting another code.` });
     }
 
-    // 3. Check existing users based on purpose
     const existingUser = await User.findOne({ email: cleanEmail });
 
     if (purpose === 'SIGNUP_VERIFY' && existingUser) {
       return res.status(400).json({ message: 'User with this email already exists.' });
     }
 
-    // Security: Do not reveal if email is not registered during password reset
     if (purpose === 'PASSWORD_RESET' && !existingUser) {
-      return res.status(200).json({
-        message: 'If an account exists for this email, an OTP has been sent.',
-      });
+      return res.status(200).json({ message: 'If an account exists for this email, an OTP has been sent.' });
     }
 
-    // 4. Generate a secure 6-digit numeric OTP
+    // Generate secure 6-digit OTP
     const otp = crypto.randomInt(100000, 999999).toString();
-    const otpHash = hashOtp(otp);
-
-    // 5. Delete existing OTPs for this email and purpose to avoid clutter
+    
+    // Clear old OTPs and save new one
     await Otp.deleteMany({ email: cleanEmail, purpose });
-
-    // 6. Save OTP document (expires in 10 minutes)
     await Otp.create({
       email: cleanEmail,
-      otpHash,
+      otpHash: hashOtp(otp),
       purpose,
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     });
 
-    // DEV ONLY LOGGING:
     console.log(`[OTP GENERATED] (${purpose}) for ${cleanEmail}: ${otp}`);
-
-    // 7. Dispatch the HTML Email
-    const emailHtml = getOtpEmailTemplate(otp, purpose);
-    const subject = purpose === 'SIGNUP_VERIFY' 
-      ? 'Verify Your Clinic Registration' 
-      : 'Password Reset Verification Code';
 
     await sendEmail({
       to: cleanEmail,
-      subject,
-      html: emailHtml,
+      subject: purpose === 'SIGNUP_VERIFY' ? 'Verify Your Clinic Registration' : 'Password Reset Verification Code',
+      html: getOtpEmailTemplate(otp, purpose),
     });
 
     return res.status(200).json({ message: 'OTP sent successfully to your email.' });
@@ -100,31 +97,24 @@ const sendOtp = async (req, res) => {
 };
 
 // ==========================================
-// @desc    Register New Clinic (Admin Sign Up - OTP Protected)
+// @desc    Register New Clinic
 // @route   POST /api/auth/register
 // ==========================================
 const registerClinic = async (req, res) => {
   try {
-    const { clinicName, fullName, email, password, otp } = req.body;
+    const { clinicName, fullName, clinicType, email, password, otp } = req.body;
 
-    // 1. Validation
     if (!fullName || !clinicName || !email || !password || !otp) {
       return res.status(400).json({ message: 'Missing required fields, including verification OTP.' });
     }
 
     const cleanEmail = email.toLowerCase().trim();
-
-    const userExists = await User.findOne({ email: cleanEmail });
-    if (userExists) {
+    if (await User.findOne({ email: cleanEmail })) {
       return res.status(400).json({ message: 'User with this email already exists' });
     }
 
-    // 2. Verify Signup OTP
     const otpRecord = await Otp.findOne({ email: cleanEmail, purpose: 'SIGNUP_VERIFY' });
-
-    if (!otpRecord) {
-      return res.status(400).json({ message: 'OTP expired or not found. Please request a new code.' });
-    }
+    if (!otpRecord) return res.status(400).json({ message: 'OTP expired or not found. Please request a new code.' });
 
     if (otpRecord.attempts >= 5) {
       await Otp.deleteOne({ _id: otpRecord._id });
@@ -137,14 +127,12 @@ const registerClinic = async (req, res) => {
       return res.status(400).json({ message: `Invalid OTP code. (${5 - otpRecord.attempts} attempts left)` });
     }
 
-    // 3. Create Clinic
-    let shortId = `CL-${Math.floor(1000 + Math.random() * 9000)}`;
     const clinic = await Clinic.create({
       name: clinicName,
-      clinicId: shortId,
+      clinicId: `CL-${Math.floor(1000 + Math.random() * 9000)}`,
+      clinicType: clinicType || 'General_Practice', 
     });
 
-    // 4. Create Admin User (WITHOUT BRANCH)
     const user = await User.create({
       clinicId: clinic._id,
       name: fullName,
@@ -157,48 +145,25 @@ const registerClinic = async (req, res) => {
       doctorConfig: { commissionPercentage: 0 },
     });
 
-    // 5. Initialize Permissions — one document per role
     await RoleConfig.insertMany([
-      {
-        clinicId: clinic._id,
-        roleId: 'administrator',
-        permissions: [
-          'fin_view_revenue',
-          'fin_edit_invoice',
-          'fin_discounts',
-          'pt_delete',
-          'pt_export',
-          'ops_settings',
-          'ops_calendar',
-          'branch_manage',
-          'branch_create',
-          'user_manage_global',
-        ],
-      },
-      {
-        clinicId: clinic._id,
-        roleId: 'doctor',
-        permissions: ['fin_view_revenue', 'ops_calendar'],
-      },
-      {
-        clinicId: clinic._id,
-        roleId: 'receptionist',
-        permissions: ['ops_calendar', 'fin_edit_invoice'],
-      },
+      { clinicId: clinic._id, roleId: 'administrator', permissions: ['fin_view_revenue', 'fin_edit_invoice', 'fin_discounts', 'pt_delete', 'pt_export', 'ops_settings', 'ops_calendar', 'branch_manage', 'branch_create', 'user_manage_global'] },
+      { clinicId: clinic._id, roleId: 'doctor', permissions: ['fin_view_revenue', 'ops_calendar'] },
+      { clinicId: clinic._id, roleId: 'receptionist', permissions: ['ops_calendar', 'fin_edit_invoice'] },
     ]);
 
-    // 6. Delete OTP after successful registration
     await Otp.deleteOne({ _id: otpRecord._id });
 
-    res.status(201).json({
+    // Utilize the new Cookie Helper
+    sendTokenResponse({
       _id: user._id,
       fullName: user.fullName,
       email: user.email,
       role: user.role,
       clinicId: clinic._id,
-      token: generateToken(user._id),
+      clinicType: clinic.clinicType, 
       defaultBranch: null,
-    });
+    }, 201, res);
+
   } catch (error) {
     console.error('Registration Error:', error);
     res.status(500).json({ message: error.message });
@@ -213,24 +178,17 @@ const resetPasswordWithOtp = async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
 
-    if (!email || !otp || !newPassword) {
-      return res.status(400).json({ message: 'Email, OTP, and new password are required.' });
-    }
-
-    if (newPassword.length < 8) {
-      return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
-    }
+    if (!email || !otp || !newPassword) return res.status(400).json({ message: 'Email, OTP, and new password are required.' });
+    if (newPassword.length < 8) return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
 
     const cleanEmail = email.toLowerCase().trim();
     const otpRecord = await Otp.findOne({ email: cleanEmail, purpose: 'PASSWORD_RESET' });
 
-    if (!otpRecord) {
-      return res.status(400).json({ message: 'OTP expired or not found. Please request a new code.' });
-    }
+    if (!otpRecord) return res.status(400).json({ message: 'OTP expired or not found.' });
 
     if (otpRecord.attempts >= 5) {
       await Otp.deleteOne({ _id: otpRecord._id });
-      return res.status(429).json({ message: 'Too many incorrect attempts. Please request a new code.' });
+      return res.status(429).json({ message: 'Too many incorrect attempts.' });
     }
 
     if (hashOtp(otp) !== otpRecord.otpHash) {
@@ -240,26 +198,20 @@ const resetPasswordWithOtp = async (req, res) => {
     }
 
     const user = await User.findOne({ email: cleanEmail });
-    if (!user) {
-      return res.status(404).json({ message: 'User account not found.' });
-    }
+    if (!user) return res.status(404).json({ message: 'User account not found.' });
 
-    // Directly assign password; ensure your User model has a pre('save') hook to hash it!
     user.password = newPassword;
     user.mustChangePassword = false;
     user.status = 'Active';
     await user.save();
 
-    // Delete OTP after successful reset
     await Otp.deleteOne({ _id: otpRecord._id });
-
     return res.status(200).json({ message: 'Password has been reset successfully.' });
   } catch (error) {
     console.error('Reset Password Error:', error);
     return res.status(500).json({ message: 'An error occurred while resetting your password.' });
   }
 };
-
 
 const verifyOtp = async (req, res) => {
   try {
@@ -270,6 +222,17 @@ const verifyOtp = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
+
+    //  DEV BYPASS: Allow a master test code (e.g., "123456") or a global env flag in development
+    const isDev = process.env.NODE_ENV !== 'production';
+    const isMasterBypass = otp === '123456' || process.env.BYPASS_EMAIL_VERIFICATION === 'true';
+
+    if (isDev && isMasterBypass) {
+      console.log(`[DEV BYPASS] OTP verification bypassed for ${cleanEmail} using test code.`);
+      return res.status(200).json({ message: 'OTP verified successfully (Dev Bypass).' });
+    }
+
+    // --- STANDARD OTP VERIFICATION LOGIC ---
     const otpRecord = await Otp.findOne({ email: cleanEmail, purpose });
 
     if (!otpRecord) return res.status(400).json({ message: 'OTP expired or not found.' });
@@ -285,15 +248,15 @@ const verifyOtp = async (req, res) => {
       return res.status(400).json({ message: `Invalid OTP code. (${5 - otpRecord.attempts} attempts left)` });
     }
 
-    // OTP is valid! We don't delete it yet, because register/resetPassword will need it.
     res.status(200).json({ message: 'OTP verified successfully.' });
   } catch (error) {
+    console.error("Verify OTP Error:", error);
     res.status(500).json({ message: 'Server error during verification.' });
   }
 };
 
 // ==========================================
-// @desc    Login User (UNCHANGED)
+// @desc    Login User
 // @route   POST /api/auth/login
 // ==========================================
 const loginUser = async (req, res) => {
@@ -306,55 +269,42 @@ const loginUser = async (req, res) => {
       .populate('allowedBranches', 'name branchName branchCode');
 
     if (user && (await user.matchPassword(password))) {
-
-      // BLOCK LOGIN IF CLINIC IS NOT ACTIVE
+      
       if (user.clinicId?.accountStatus === 'Pending_Approval') {
-        return res.status(403).json({ 
-          message: 'Your clinic account is awaiting admin approval. We will notify you via email shortly.' 
-        });
+        return res.status(403).json({ message: 'Your clinic account is awaiting admin approval.' });
       }
-
       if (user.clinicId?.accountStatus === 'Suspended') {
-        return res.status(403).json({ 
-          message: 'Your clinic account has been suspended. Please contact support.' 
-        });
+        return res.status(403).json({ message: 'Your clinic account has been suspended.' });
       }
 
-      // Staff Check
       if (user.role !== 'Administrator') {
-        if (!clinicShortId) {
-          return res.status(400).json({ message: 'Clinic ID is required for staff login.' });
-        }
-        if (user.clinicId?.clinicId !== clinicShortId) {
-          return res.status(401).json({ message: 'Invalid Clinic ID for this user.' });
-        }
+        if (!clinicShortId) return res.status(400).json({ message: 'Clinic ID is required for staff login.' });
+        if (user.clinicId?.clinicId !== clinicShortId) return res.status(401).json({ message: 'Invalid Clinic ID.' });
       }
 
-      // Password Change Check
-      if (user.mustChangePassword) {
-        return res.json({
-          _id: user._id,
-          fullName: user.fullName,
-          email: user.email,
-          role: user.role,
-          token: generateToken(user._id),
-          requirePasswordChange: true,
-        });
-      }
-
-      res.json({
+      const payload = {
         _id: user._id,
         fullName: user.fullName,
         email: user.email,
         role: user.role,
+        clinicType: user.clinicId?.clinicType,
+      };
+
+      if (user.mustChangePassword) {
+        return sendTokenResponse({ ...payload, requirePasswordChange: true }, 200, res);
+      }
+
+      // Utilize the new Cookie Helper
+      sendTokenResponse({
+        ...payload,
         clinicId: user.clinicId._id,
         clinicShortId: user.clinicId.clinicId,
-        token: generateToken(user._id),
         defaultBranch: user.defaultBranch?._id || null,
         branchName: user.defaultBranch?.name || null,
         branchCode: user.defaultBranch?.branchCode || null,
         allowedBranches: user.allowedBranches || [],
-      });
+      }, 200, res);
+
     } else {
       res.status(401).json({ message: 'Invalid email or password' });
     }
@@ -365,13 +315,14 @@ const loginUser = async (req, res) => {
 };
 
 // ==========================================
-// @desc    Change Password (In-App Password Change - UNCHANGED)
+// @desc    Change Password (In-App)
 // @route   PUT /api/auth/password
 // ==========================================
 const changePassword = async (req, res) => {
   const { oldPassword, newPassword } = req.body;
 
   const user = await User.findById(req.user._id)
+    .populate('clinicId')
     .populate('defaultBranch', 'name branchName branchCode')
     .populate('allowedBranches', 'name branchName branchCode');
 
@@ -379,23 +330,36 @@ const changePassword = async (req, res) => {
     user.password = newPassword;
     user.mustChangePassword = false;
     user.status = 'Active';
-
     await user.save();
 
-    res.json({
+    // Utilize the new Cookie Helper
+    sendTokenResponse({
       _id: user._id,
       fullName: user.fullName,
       email: user.email,
       role: user.role,
-      token: generateToken(user._id),
+      clinicType: user.clinicId?.clinicType,
       defaultBranch: user.defaultBranch?._id || null,
       branchName: user.defaultBranch?.name || null,
       branchCode: user.defaultBranch?.branchCode || null,
       allowedBranches: user.allowedBranches || [],
-    });
+    }, 200, res);
+
   } else {
     res.status(401).json({ message: 'Invalid old password' });
   }
+};
+
+// ==========================================
+// NEW: @desc    Logout User & Clear Cookie
+// @route   POST /api/auth/logout
+// ==========================================
+const logoutUser = (req, res) => {
+  res.cookie('token', '', {
+    httpOnly: true,
+    expires: new Date(0), // Instantly expires the cookie
+  });
+  res.status(200).json({ message: 'Logged out successfully' });
 };
 
 module.exports = {
@@ -404,5 +368,6 @@ module.exports = {
   loginUser,
   changePassword,
   resetPasswordWithOtp,
-  verifyOtp
+  verifyOtp,
+  logoutUser // Exported new route
 };

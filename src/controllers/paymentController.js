@@ -3,6 +3,9 @@ const Patient = require('../models/Patient');
 const mongoose = require('mongoose');
 const Invoice = require('../models/Invoice');
 
+//  IMPORT THE AUDIT LOGGER
+const logAudit = require('../utils/auditLogger'); // Adjust path if needed
+
 // @desc    Record a new payment
 // @route   POST /api/payments
 // @access  Private (Clinic Staff)
@@ -62,6 +65,15 @@ const addPayment = async (req, res) => {
 
         await patient.save();
 
+        //  AUDIT LOG
+        logAudit({
+            req, 
+            action: 'RECORD_PAYMENT', 
+            entity: 'Payment', 
+            entityId: payment._id,
+            details: `Recorded payment of ₹${amount} via ${method} for patient ${patient.fullName} (Receipt: ${receiptNumber})`
+        });
+
         res.status(201).json({ payment, updatedPatient: patient });
 
     } catch (error) {
@@ -100,9 +112,6 @@ const getPatientLedger = async (req, res) => {
         if (!patient) return res.status(404).json({ message: 'Patient not found in this branch' });
 
         // 2. GET PAYMENTS
-        // Note: We fetch ALL payments for this patient ID within the clinic.
-        // Even if they paid at a different branch previously (if you allow transfers),
-        // the ledger should show the full financial history.
         const payments = await Payment.find({
             patientId: patient._id,
             clinicId: req.user.clinicId

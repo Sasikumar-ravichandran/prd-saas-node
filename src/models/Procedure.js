@@ -8,16 +8,16 @@ const ProcedureSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true }, 
 
   // 2. Category (For Analytics)
+  // CHANGED: Removed the strict Dental Enum so any specialty can create their own categories.
   category: { 
     type: String, 
-    enum: ['Consultation', 'General', 'Endodontics', 'Orthodontics', 'Surgery', 'Prosthetics'],
     default: 'General'
   },
 
   // 3. Financials
   price: { type: Number, required: true, min: 0 }, 
 
-  //  CRITICAL: Keep this! 
+  // CRITICAL: Keep this! 
   // This is the "Expense" attached to the work, regardless of who does it.
   labCost: { type: Number, default: 0 }, 
 

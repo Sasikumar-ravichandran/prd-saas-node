@@ -1,6 +1,9 @@
 const Inventory = require('../models/Inventory');
 const InventoryLog = require('../models/InventoryLog');
 
+//  IMPORT THE AUDIT LOGGER
+const logAudit = require('../utils/auditLogger'); // Adjust path if needed
+
 // @desc    Get All Inventory (Filtered by Branch)
 // @route   GET /api/inventory
 const getInventory = async (req, res) => {
@@ -20,6 +23,7 @@ const getInventory = async (req, res) => {
 const addInventory = async (req, res) => {
   try {
     const { name, category, quantity, lowStockThreshold, expiryDate, costPerUnit } = req.body;
+    let isExisting = false;
 
     // 1. Check if item exists in THIS branch
     let item = await Inventory.findOne({
@@ -29,7 +33,8 @@ const addInventory = async (req, res) => {
     });
 
     if (item) {
-      // UPDATE EXISTING
+      // UPDATE EXISTING (Restock)
+      isExisting = true;
       item.quantity += Number(quantity);
       item.lastRestocked = Date.now();
       if(expiryDate) item.expiryDate = expiryDate;
@@ -49,10 +54,19 @@ const addInventory = async (req, res) => {
       branchId: req.branchId,
       itemId: item._id,
       itemName: item.name,
-      action: 'Restock',
+      action: isExisting ? 'Restock' : 'Initial Add',
       quantityChange: quantity,
       performedBy: req.user._id,
-      notes: 'Initial Add / Restock'
+      notes: isExisting ? 'Restocked inventory items' : 'Initial item registration'
+    });
+
+    //  AUDIT LOG
+    logAudit({
+      req, 
+      action: isExisting ? 'RESTOCK_INVENTORY' : 'ADD_INVENTORY', 
+      entity: 'Inventory', 
+      entityId: item._id,
+      details: `${isExisting ? 'Restocked' : 'Added new'} inventory item: ${item.name} (+${quantity} units)`
     });
 
     res.status(200).json(item);
@@ -91,6 +105,15 @@ const consumeStock = async (req, res) => {
       notes: reason || 'Manual Consumption'
     });
 
+    //  AUDIT LOG
+    logAudit({
+      req, 
+      action: 'CONSUME_INVENTORY', 
+      entity: 'Inventory', 
+      entityId: item._id,
+      details: `Consumed ${quantity} unit(s) of ${item.name}. Reason: ${reason || 'Manual Consumption'}`
+    });
+
     res.json(item);
 
   } catch (error) {
@@ -126,13 +149,18 @@ const updateInventory = async (req, res) => {
     }
 
     // 2. Update Fields
-    // We allow updating everything passed in req.body
     Object.assign(item, updates);
-
-    // 3. Log the "Adjustment" if quantity changed (Optional but good for audit)
-    // You can add logic here to compare old vs new quantity if you want strict logging
-
     await item.save();
+
+    //  AUDIT LOG
+    logAudit({
+      req, 
+      action: 'UPDATE_INVENTORY', 
+      entity: 'Inventory', 
+      entityId: item._id,
+      details: `Updated attributes for inventory item: ${item.name}`
+    });
+
     res.json(item);
 
   } catch (error) {
@@ -154,7 +182,18 @@ const deleteInventory = async (req, res) => {
       return res.status(401).json({ message: 'Not authorized to delete this item' });
     }
 
+    const itemName = item.name;
     await item.deleteOne();
+
+    //  AUDIT LOG
+    logAudit({
+      req, 
+      action: 'DELETE_INVENTORY', 
+      entity: 'Inventory', 
+      entityId: item._id,
+      details: `Permanently deleted inventory item: ${itemName}`
+    });
+
     res.json({ message: 'Item removed' });
 
   } catch (error) {

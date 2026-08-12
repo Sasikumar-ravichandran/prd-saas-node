@@ -1,18 +1,18 @@
 const Invoice = require('../models/Invoice');
 const User = require('../models/User');
 const Patient = require('../models/Patient');
+// NEW: Import Procedure to fetch lab costs
+const Procedure = require('../models/Procedure'); 
 const mongoose = require('mongoose');
 
-// @desc    Get all invoices (Filtered by Branch)
-// @route   GET /api/invoices
-
+// @desc    Create an Invoice
+// @route   POST /api/invoices
 // @access  Private (Receptionist/Admin)
 const createInvoice = async (req, res) => {
   try {
     const { patientId, doctorId, items, discount, notes, dueDate } = req.body;
 
-    //  1. BULLETPROOF DOCTOR RESOLUTION
-    // No matter what the frontend sends ("Prashanth" or "6a1902..."), we find the real ID.
+    // 1. BULLETPROOF DOCTOR RESOLUTION
     let doctor = null;
     let actualDoctorId = null;
 
@@ -20,7 +20,6 @@ const createInvoice = async (req, res) => {
       if (mongoose.Types.ObjectId.isValid(doctorId)) {
         doctor = await User.findById(doctorId);
       } else {
-        // It's a string name, search the database for it
         doctor = await User.findOne({ fullName: doctorId, clinicId: req.user.clinicId });
       }
     }
@@ -31,22 +30,37 @@ const createInvoice = async (req, res) => {
       });
     }
 
-    //  Grab the verified, 100% authentic MongoDB ID
     actualDoctorId = doctor._id;
     const commissionRate = doctor.doctorConfig?.commissionPercentage || 0;
 
-    // 2. Process Items & Calculate Commission
+    // 2. Process Items & Calculate Commission WITH LAB COST DEDUCTION
     let totalAmount = 0;
-    const processedItems = items.map(item => {
+    
+    // We use Promise.all because we need to query the database for every item
+    const processedItems = await Promise.all(items.map(async (item) => {
       const itemCost = Number(item.cost);
       totalAmount += itemCost;
+
+      // Fetch the Procedure to check if it has a Lab Cost
+      const procedureRecord = await Procedure.findOne({ 
+        name: item.procedureName, 
+        clinicId: req.user.clinicId 
+      });
+
+      const labCost = procedureRecord ? procedureRecord.labCost : 0;
+      
+      // The New Math: (Patient Cost - Lab Cost) * Commission %
+      const netProfit = Math.max(0, itemCost - labCost); // Ensure it doesn't go negative
+      const calculatedCommission = (netProfit * commissionRate) / 100;
+
       return {
         treatmentId: item.treatmentId,
         procedureName: item.procedureName,
         cost: itemCost,
-        doctorCommissionAmount: (itemCost * commissionRate) / 100
+        labCostDeducted: labCost, // Record the lab cost used
+        doctorCommissionAmount: calculatedCommission // Save the accurate commission
       };
-    });
+    }));
 
     // 3. Calculate Finals
     const finalDiscount = Number(discount) || 0;
@@ -58,7 +72,7 @@ const createInvoice = async (req, res) => {
       clinicId: req.user.clinicId,
       branchId: req.branchId || req.user.defaultBranch,
       patientId,
-      doctorId: actualDoctorId, //  THE MAGIC FIX: Force Mongoose to use the verified ID!
+      doctorId: actualDoctorId, 
       invoiceNumber,
       items: processedItems,
       totalAmount,
@@ -71,16 +85,14 @@ const createInvoice = async (req, res) => {
     });
 
     // 5. Mark Treatments as "Billed" in Patient Model
-    // 5. Mark Treatments as "Billed" (NATIVE MONGODB DRIVER METHOD)
     if (items.length > 0) {
       const treatmentObjectIds = items.map(i => new mongoose.Types.ObjectId(i.treatmentId));
 
-      const updateResult = await Patient.collection.updateOne(
+      await Patient.collection.updateOne(
         { _id: new mongoose.Types.ObjectId(patientId) },
         { $set: { "treatmentPlan.$[elem].billed": true } },
         { arrayFilters: [{ "elem._id": { $in: treatmentObjectIds } }] }
       );
-
     }
 
     res.status(201).json(invoice);
@@ -99,7 +111,7 @@ const getInvoices = async (req, res) => {
     })
       .populate('patientId', 'fullName patientId mobile')
       .populate('doctorId', 'fullName')
-      .sort({ createdAt: -1 }); // Newest first
+      .sort({ createdAt: -1 });
 
     res.json(invoices);
   } catch (error) {
@@ -107,8 +119,6 @@ const getInvoices = async (req, res) => {
   }
 };
 
-// @desc    Get single invoice by ID (For Printing/Viewing)
-// @route   GET /api/invoices/:id
 const getInvoiceById = async (req, res) => {
   try {
     const invoice = await Invoice.findOne({
@@ -126,25 +136,21 @@ const getInvoiceById = async (req, res) => {
   }
 };
 
-
-// @desc    Void/Cancel an Invoice
 const voidInvoice = async (req, res) => {
   try {
     const invoice = await Invoice.findOne({ _id: req.params.id, clinicId: req.user.clinicId });
     if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
 
-    // 1. UNLOCK the treatments (Using the Native MongoDB override!)
     if (invoice.items && invoice.items.length > 0) {
       const treatmentObjectIds = invoice.items.map(i => new mongoose.Types.ObjectId(i.treatmentId));
       
       await Patient.collection.updateOne(
         { _id: new mongoose.Types.ObjectId(invoice.patientId) },
-        { $set: { "treatmentPlan.$[elem].billed": false } }, //  Change back to false!
+        { $set: { "treatmentPlan.$[elem].billed": false } }, 
         { arrayFilters: [{ "elem._id": { $in: treatmentObjectIds } }] }
       );
     }
 
-    // 2. Mark as void and clear balance
     invoice.status = 'Void';
     invoice.balance = 0;
     await invoice.save();
@@ -170,12 +176,10 @@ const recordPayment = async (req, res) => {
       return res.status(400).json({ message: `Cannot overpay. Balance due is ₹${invoice.balance}` });
     }
 
-    //  FIXED: Initialize the array if it's undefined
     if (!invoice.payments) {
       invoice.payments = [];
     }
 
-    // Now it is safe to push
     invoice.payments.push({
       amount: paymentAmount,
       method: paymentMethod,
@@ -202,4 +206,4 @@ const recordPayment = async (req, res) => {
   }
 };
 
-module.exports = { createInvoice, getInvoices, getInvoiceById, recordPayment, voidInvoice, recordPayment };
+module.exports = { createInvoice, getInvoices, getInvoiceById, voidInvoice, recordPayment };
