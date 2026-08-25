@@ -16,7 +16,8 @@ const io = new Server(server, {
   cors: {
     // Adding both common React ports just to be safe (Vite uses 5173, CRA uses 3000)
     origin: ["http://localhost:3000", "http://localhost:5173"],
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 

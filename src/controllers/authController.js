@@ -113,18 +113,29 @@ const registerClinic = async (req, res) => {
       return res.status(400).json({ message: 'User with this email already exists' });
     }
 
-    const otpRecord = await Otp.findOne({ email: cleanEmail, purpose: 'SIGNUP_VERIFY' });
-    if (!otpRecord) return res.status(400).json({ message: 'OTP expired or not found. Please request a new code.' });
+    //DEV BYPASS SUPPORT: Check if dev environment and master bypass code is used
+    const isDev = process.env.NODE_ENV !== 'production';
+    const isMasterBypass = otp === '123456' || process.env.BYPASS_EMAIL_VERIFICATION === 'true';
 
-    if (otpRecord.attempts >= 5) {
-      await Otp.deleteOne({ _id: otpRecord._id });
-      return res.status(429).json({ message: 'Too many incorrect attempts. Please request a new code.' });
-    }
+    let otpRecord = null;
 
-    if (hashOtp(otp) !== otpRecord.otpHash) {
-      otpRecord.attempts += 1;
-      await otpRecord.save();
-      return res.status(400).json({ message: `Invalid OTP code. (${5 - otpRecord.attempts} attempts left)` });
+    if (!(isDev && isMasterBypass)) {
+      // Standard database check if bypass is not active
+      otpRecord = await Otp.findOne({ email: cleanEmail, purpose: 'SIGNUP_VERIFY' });
+      if (!otpRecord) return res.status(400).json({ message: 'OTP expired or not found. Please request a new code.' });
+
+      if (otpRecord.attempts >= 5) {
+        await Otp.deleteOne({ _id: otpRecord._id });
+        return res.status(429).json({ message: 'Too many incorrect attempts. Please request a new code.' });
+      }
+
+      if (hashOtp(otp) !== otpRecord.otpHash) {
+        otpRecord.attempts += 1;
+        await otpRecord.save();
+        return res.status(400).json({ message: `Invalid OTP code. (${5 - otpRecord.attempts} attempts left)` });
+      }
+    } else {
+      console.log(`[DEV BYPASS] Clinic registration OTP bypassed for ${cleanEmail} using test code.`);
     }
 
     const clinic = await Clinic.create({
@@ -151,9 +162,12 @@ const registerClinic = async (req, res) => {
       { clinicId: clinic._id, roleId: 'receptionist', permissions: ['ops_calendar', 'fin_edit_invoice'] },
     ]);
 
-    await Otp.deleteOne({ _id: otpRecord._id });
+    // Clean up OTP record if it exists in DB
+    if (otpRecord) {
+      await Otp.deleteOne({ _id: otpRecord._id });
+    }
 
-    // Utilize the new Cookie Helper
+    // Utilize the Cookie Helper
     sendTokenResponse({
       _id: user._id,
       fullName: user.fullName,
@@ -276,6 +290,10 @@ const loginUser = async (req, res) => {
       if (user.clinicId?.accountStatus === 'Suspended') {
         return res.status(403).json({ message: 'Your clinic account has been suspended.' });
       }
+
+      console.log("DB Clinic Object:", user.clinicId); 
+        console.log("DB Clinic ID String:", user.clinicId.clinicId);
+        console.log("Frontend Payload ID:", clinicShortId);
 
       if (user.role !== 'Administrator') {
         if (!clinicShortId) return res.status(400).json({ message: 'Clinic ID is required for staff login.' });

@@ -1,5 +1,9 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+
+// Configure Multer to keep files temporarily in RAM
+const upload = multer({ storage: multer.memoryStorage() });
 
 const {
   createPatient,
@@ -17,12 +21,12 @@ const {
   updateSpecialtyDataKey,
   getCloudUploadUrl,
   saveAttachmentUrl,
-  deleteCloudAttachment
+  deleteCloudAttachment,
+  uploadPatientFile
 } = require('../controllers/patientController');
 
 const { scanIntakeForm } = require('../controllers/ocrController');
 const { protect } = require('../middleware/authMiddleware');
-const upload = require('../middleware/uploadMiddleware');
 
 // Apply protection to all routes in this file
 router.use(protect);
@@ -35,7 +39,7 @@ router.route('/:id')
   .put(updatePatient);
 
 // Treatment Routes
-router.route('/:id/treatments').post(addTreatment);       
+router.route('/:id/treatments').post(addTreatment);        
 router.route('/:id/treatments/start').post(startTreatment); 
 router.route('/:id/treatments/:itemId')
   .patch(updateTreatmentStatus)  
@@ -49,9 +53,12 @@ router.put('/:id/tooth', updateSpecialtyDataKey);
 // OCR Intake Scan
 router.post('/scan', upload.single('formImage'), scanIntakeForm);
 
-// Cloud Storage / CDN Routes (Ensure these exist in patientController.js!)
+// Cloud Storage / CDN Routes
 router.post('/:id/upload-url', getCloudUploadUrl);
 router.post('/:id/save-attachment', saveAttachmentUrl);
 router.delete('/:id/attachment', deleteCloudAttachment);
+
+//NEW: Bulletproof backend-routed file upload (Bypasses browser CORS/ERR_CONNECTION_RESET)
+router.post('/:id/upload-file', upload.single('file'), uploadPatientFile);
 
 module.exports = router;

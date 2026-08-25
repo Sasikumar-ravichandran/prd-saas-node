@@ -5,9 +5,54 @@ const Invoice = require('../models/Invoice');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
+const { uploadFileToR2, deleteFileFromR2 } = require('../services/s3Service');
+const v4 = require('uuid').v4;
 
 //  IMPORT THE AUDIT LOGGER
-const logAudit = require('../utils/auditLogger'); // Adjust path if it is in /services
+const logAudit = require('../utils/auditLogger');
+
+
+const uploadPatientFile = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const file = req.file; // Captured via multer middleware
+    const { type } = req.body; 
+
+    if (!file) return res.status(400).json({ message: 'No file provided' });
+
+    const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    if (!patient) return res.status(404).json({ message: 'Patient not found' });
+
+    const fileExtension = file.originalname.split('.').pop();
+    const uniqueKey = `${req.user.clinicId}/${patient._id}/${v4()}.${fileExtension}`;
+
+    //Call your clean S3 service to handle the actual upload
+    await uploadFileToR2(file.buffer, file.mimetype, uniqueKey);
+
+    const fileUrl = `${process.env.AWS_CDN_DOMAIN}/${uniqueKey}`;
+
+    // Update patient attachments schema
+    if (!patient.attachments) patient.attachments = { photo: '', scans: [], documents: [] };
+
+    if (type === 'photo') {
+      patient.attachments.photo = fileUrl;
+    } else if (type === 'document') {
+      if (!patient.attachments.documents) patient.attachments.documents = [];
+      patient.attachments.documents.push(fileUrl);
+    } else {
+      if (!patient.attachments.scans) patient.attachments.scans = [];
+      patient.attachments.scans.push(fileUrl);
+    }
+
+    patient.markModified('attachments');
+    await patient.save();
+
+    res.status(200).json({ message: 'File uploaded successfully', fileUrl, attachments: patient.attachments });
+  } catch (error) {
+    console.error("Server-side Upload Error:", error);
+    res.status(500).json({ message: 'Failed to upload file to cloud' });
+  }
+};
 
 const getCloudUploadUrl = async (req, res) => {
   try {
@@ -19,7 +64,7 @@ const getCloudUploadUrl = async (req, res) => {
     const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
-    const uploadData = await generateUploadUrl(fileName, fileType, req.user.clinicId, patient._id);
+    const uploadData = await uploadFileToR2(fileName, fileType, req.user.clinicId, patient._id);
     res.status(200).json({ data: uploadData });
   } catch (error) {
     console.error("Presigned URL Error:", error);
@@ -84,7 +129,7 @@ const deleteCloudAttachment = async (req, res) => {
     const cdnDomain = process.env.AWS_CDN_DOMAIN;
     if (fileUrl.includes(cdnDomain)) {
       const fileKey = fileUrl.split(`${cdnDomain}/`)[1];
-      if (fileKey) await deleteFileFromS3(fileKey);
+      if (fileKey) await deleteFileFromR2(fileKey);
     }
 
     //  AUDIT LOG
@@ -616,5 +661,6 @@ module.exports = {
   updateSpecialtyDataKey,
   getCloudUploadUrl,
   saveAttachmentUrl,
-  deleteCloudAttachment
+  deleteCloudAttachment,
+  uploadPatientFile
 };

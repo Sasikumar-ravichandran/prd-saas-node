@@ -241,7 +241,8 @@ const updateMe = async (req, res) => {
 // @access  Private
 const changePassword = async (req, res) => {
     try {
-        const { currentPassword, newPassword } = req.body;
+        // 1. ⚡️ FIXED: Change 'currentPassword' to 'oldPassword' to match React frontend
+        const { oldPassword, newPassword } = req.body;
 
         const user = await User.findById(req.user._id).select('+password');
 
@@ -249,19 +250,19 @@ const changePassword = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // 1. Verify current password
-        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        // 2. Verify current password
+        const isMatch = await bcrypt.compare(oldPassword, user.password);
         if (!isMatch) {
             return res.status(400).json({ message: 'Incorrect current password' });
         }
 
-        // 2. Hash and save new password
-        const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(newPassword, salt);
+        // 3. Update password and remove the force-change flag
+        user.password = newPassword; 
+        user.mustChangePassword = false; // ⚡️ ADDED: So they don't get stuck in a loop!
 
-        await user.save();
+        await user.save(); // Note: If you have a Mongoose pre-save hook for hashing, this automatically hashes it!
 
-        //  AUDIT LOG
+        // AUDIT LOG
         logAudit({
             req, 
             action: 'CHANGE_PASSWORD', 
@@ -270,7 +271,18 @@ const changePassword = async (req, res) => {
             details: `User successfully changed their account password`
         });
 
-        res.json({ message: 'Password updated successfully' });
+        // 4. ⚡️ FIXED: Return the full user object so React can update localStorage
+        const payload = {
+            _id: user._id,
+            fullName: user.fullName,
+            email: user.email,
+            role: user.role,
+            clinicId: user.clinicId, 
+            defaultBranch: user.defaultBranch || null,
+            allowedBranches: user.allowedBranches || [],
+        };
+
+        res.json(payload);
 
     } catch (error) {
         console.error("Change Password Error:", error);

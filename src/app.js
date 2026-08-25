@@ -22,13 +22,20 @@ app.use(helmet({
   crossOriginResourcePolicy: false, 
 }));
 
-app.use(cors()); // Allows React to talk to Node
-
+app.use(cors({
+  origin: ["http://localhost:3000", "http://localhost:5173", "http://localhost:5713"],
+  credentials: true
+}));
 // 2. Body Parser with Size Limits (Prevents payload-based DDoS)
 app.use(express.json({ limit: '2mb' })); 
 app.use(cookieParser());
 // 3. Mongo Sanitize: Scans req.body and removes malicious '$' operators
-app.use(mongoSanitize());
+app.use((req, res, next) => {
+  if (req.body) mongoSanitize.sanitize(req.body);
+  if (req.params) mongoSanitize.sanitize(req.params);
+  if (req.query) mongoSanitize.sanitize(req.query);
+  next();
+});
 
 // 4. Global Rate Limiter: Protects from basic DDoS attacks.
 const globalLimiter = rateLimit({

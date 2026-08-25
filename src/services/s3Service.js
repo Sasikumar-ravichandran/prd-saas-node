@@ -1,52 +1,50 @@
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const crypto = require('crypto');
-const path = require('path');
+const { NodeHttpHandler } = require('@smithy/node-http-handler'); 
+const https = require('https');
 
+// Initialize Cloudflare R2 Client
 const s3Client = new S3Client({
-  region: process.env.AWS_REGION || 'us-east-1',
+  region: 'auto',
+  endpoint: process.env.CLOUDFLARE_R2_ENDPOINT.replace(/"/g, '').trim(),
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   },
-  // endpoint: process.env.AWS_ENDPOINT // Uncomment this if using Cloudflare R2
+  forcePathStyle: true,
+  requestChecksumCalculation: 'WHEN_REQUIRED', //1. MUST BE HERE FOR R2
+  responseChecksumValidation: 'WHEN_REQUIRED', //1. MUST BE HERE FOR R2
+  requestHandler: new NodeHttpHandler({
+    httpsAgent: new https.Agent({
+      keepAlive: true,
+      family: 4 
+    })
+  })
 });
 
-const BUCKET_NAME = process.env.AWS_BUCKET_NAME;
-const CDN_DOMAIN = process.env.AWS_CDN_DOMAIN; // e.g., 'cdn.yourclinic.com' or S3 bucket URL
-
-const generateUploadUrl = async (fileName, fileType, clinicId, patientId) => {
-  const uniqueId = crypto.randomBytes(8).toString('hex');
-  const ext = path.extname(fileName);
-  
-  // Create a clean folder structure: clinicId/patientId/timestamp-uuid.webp
-  const safeFilename = `${clinicId}/${patientId}/${Date.now()}-${uniqueId}${ext}`;
-
+// 1. Upload Buffer directly to R2
+const uploadFileToR2 = async (fileBuffer, mimeType, uniqueKey) => {
   const command = new PutObjectCommand({
-    Bucket: BUCKET_NAME,
-    Key: safeFilename,
-    ContentType: fileType,
+    Bucket: process.env.AWS_BUCKET_NAME,
+    Key: uniqueKey,
+    Body: fileBuffer,
+    ContentType: mimeType,
+    ContentLength: fileBuffer.length, //2. CRITICAL: Stops R2 from dropping the connection
   });
-
-  // URL expires in 60 seconds. Frontend MUST upload immediately after requesting.
-  const uploadUrl = await getSignedUrl(s3Client, command, { expiresIn: 60 });
-
-  return {
-    uploadUrl,
-    fileUrl: `https://${CDN_DOMAIN}/${safeFilename}`,
-    fileKey: safeFilename
-  };
+  
+  return await s3Client.send(command);
 };
 
-const deleteFileFromS3 = async (fileKey) => {
+// 2. Delete File from R2
+const deleteFileFromR2 = async (fileKey) => {
   const command = new DeleteObjectCommand({
-    Bucket: BUCKET_NAME,
+    Bucket: process.env.AWS_BUCKET_NAME,
     Key: fileKey,
   });
-  await s3Client.send(command);
+
+  return await s3Client.send(command);
 };
 
 module.exports = {
-  generateUploadUrl,
-  deleteFileFromS3
+  uploadFileToR2,
+  deleteFileFromR2,
 };
