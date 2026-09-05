@@ -22,7 +22,7 @@ const sendTokenResponse = (userPayload, statusCode, res) => {
   const options = {
     httpOnly: true, // Invisible to JavaScript (Prevents XSS Attacks)
     secure: process.env.NODE_ENV === 'production', // True on HTTPS
-    sameSite: 'none',
+   sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
     maxAge: 30 * 24 * 60 * 60 * 1000, // 30 Days
   };
 

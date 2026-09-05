@@ -14,8 +14,13 @@ const server = http.createServer(app);
 const io = new Server(server, {
   pingTimeout: 60000,
   cors: {
-    // Adding both common React ports just to be safe (Vite uses 5173, CRA uses 3000)
-    origin: ["http://localhost:3000", "http://localhost:5173"],
+    origin: [
+      "http://localhost:3000", 
+      "http://localhost:5173",
+      "http://localhost:5713", 
+      "https://klinichub.com",
+      "https://saas-server-3v56.onrender.com" // If needed, or your exact Vercel frontend URL
+    ],
     methods: ["GET", "POST"],
     credentials: true
   }
