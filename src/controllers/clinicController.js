@@ -1,5 +1,8 @@
 const Clinic = require('../models/Clinic');
 
+//  IMPORT THE AUDIT LOGGER
+const logAudit = require('../utils/auditLogger'); // Adjust path if needed
+
 // @desc    Get MY Clinic Profile
 // @route   GET /api/settings/clinic
 // @access  Private (Admin/Staff)
@@ -28,27 +31,36 @@ const getClinicProfile = async (req, res) => {
 // @route   PUT /api/settings/clinic
 // @access  Private (Admin Only)
 const updateClinicProfile = async (req, res) => {
-	try {
-		const data = req.body;
+    try {
+        const data = req.body;
 
-		// SECURITY FIX:
-		// Only update the document that matches my ID.
-		// Prevents overwriting other people's clinics.
-		const clinic = await Clinic.findByIdAndUpdate(
-			req.user.clinicId, // <--- The Filter
-			data,              // The Updates
-			{ new: true, runValidators: true } // Return updated doc & check schema rules
-		);
+        // SECURITY FIX:
+        // Only update the document that matches my ID.
+        // Prevents overwriting other people's clinics.
+        const clinic = await Clinic.findByIdAndUpdate(
+            req.user.clinicId, // <--- The Filter
+            data,              // The Updates
+            { new: true, runValidators: true } // Return updated doc & check schema rules
+        );
 
-		if (!clinic) {
-			return res.status(404).json({ message: 'Clinic not found' });
-		}
+        if (!clinic) {
+            return res.status(404).json({ message: 'Clinic not found' });
+        }
 
-		res.json(clinic);
-	} catch (error) {
-		console.error("Clinic Update Error:", error);
-		res.status(500).json({ message: 'Server Error' });
-	}
+        //  AUDIT LOG
+        logAudit({
+            req, 
+            action: 'UPDATE_CLINIC_PROFILE', 
+            entity: 'Clinic', 
+            entityId: clinic._id,
+            details: `Updated master profile settings for clinic: ${clinic.name}`
+        });
+
+        res.json(clinic);
+    } catch (error) {
+        console.error("Clinic Update Error:", error);
+        res.status(500).json({ message: 'Server Error' });
+    }
 };
 
 module.exports = { getClinicProfile, updateClinicProfile };

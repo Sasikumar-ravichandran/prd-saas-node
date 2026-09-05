@@ -1,4 +1,8 @@
 const User = require('../models/User');
+const bcrypt = require('bcryptjs'); // Added incase it was missing in this scope for changePassword
+
+//  IMPORT THE AUDIT LOGGER
+const logAudit = require('../utils/auditLogger'); // Adjust path if needed
 
 // @desc    Get all users
 const getUsers = async (req, res) => {
@@ -38,7 +42,6 @@ const getUsers = async (req, res) => {
         // 6. Get Total Count for the Frontend Pagination UI
         const total = await User.countDocuments(query);
 
-        //  Return the data structured exactly like your getPatients response
         res.json({
             users,
             totalPages: Math.ceil(total / limit),
@@ -76,21 +79,27 @@ const createUser = async (req, res) => {
             role,
             status: status || 'Active',
             mobile,
-            password: password || '123456', // Default password
+            password: password || '123456', 
             mustChangePassword: true,
             defaultBranch: targetBranch,
             allowedBranches: allowedBranches && allowedBranches.length > 0 ? allowedBranches : [targetBranch],
             doctorConfig: role === 'Doctor' ? doctorConfig : undefined
         });
 
-        // 3.  POPULATE BEFORE RESPONDING
-        // This ensures the frontend gets the branch NAME, not just the ID
+        // 3. POPULATE BEFORE RESPONDING
         await user.populate('defaultBranch', 'branchName name branchCode');
 
-        // 4.  SEND EVERYTHING
-        // user.toObject() converts the Mongoose doc to a plain JS object so we don't miss anything
         const userResponse = user.toObject();
-        delete userResponse.password; // Security: remove password
+        delete userResponse.password; 
+
+        //  AUDIT LOG
+        logAudit({
+            req, 
+            action: 'CREATE_USER', 
+            entity: 'User', 
+            entityId: user._id,
+            details: `Created new staff profile for ${user.fullName} (${user.role})`
+        });
 
         res.status(201).json({ ...userResponse, message: 'User created successfully' });
 
@@ -121,20 +130,25 @@ const updateUser = async (req, res) => {
             user.doctorConfig = { ...user.doctorConfig, ...req.body.doctorConfig };
         }
 
-        // 3. Update Branch
+        // 3. Update Branch & Payroll configurations
         if (req.body.defaultBranch) user.defaultBranch = req.body.defaultBranch;
         if (req.body.baseSalary !== undefined) user.baseSalary = req.body.baseSalary;
         if (req.body.commissionRate !== undefined) user.commissionRate = req.body.commissionRate;
-        // 4. Save
-        const updatedUser = await user.save();
 
-        // 5.  POPULATE AGAIN (Critical Step)
+        const updatedUser = await user.save();
         await updatedUser.populate('defaultBranch', 'branchName name branchCode');
 
-        // 6.  SEND EVERYTHING (The Fix)
-        // Instead of manually picking fields, we send the whole object.
         const responseObj = updatedUser.toObject();
         delete responseObj.password;
+
+        //  AUDIT LOG
+        logAudit({
+            req, 
+            action: 'UPDATE_USER', 
+            entity: 'User', 
+            entityId: updatedUser._id,
+            details: `Updated staff details for user ${updatedUser.fullName}`
+        });
 
         res.json({ ...responseObj, message: "User updated successfully" });
 
@@ -146,17 +160,30 @@ const updateUser = async (req, res) => {
 
 const deleteUser = async (req, res) => {
     try {
-        await User.deleteOne({ _id: req.params.id, clinicId: req.user.clinicId });
+        const userToDelete = await User.findOne({ _id: req.params.id, clinicId: req.user.clinicId });
+        if (!userToDelete) return res.status(404).json({ message: 'User not found' });
+
+        const userName = userToDelete.fullName;
+        await userToDelete.deleteOne();
+
+        //  AUDIT LOG
+        logAudit({
+            req, 
+            action: 'DELETE_USER', 
+            entity: 'User', 
+            entityId: req.params.id,
+            details: `Permanently removed staff member: ${userName}`
+        });
+
         res.json({ message: 'User removed' });
     } catch (error) {
+        console.error("Delete User Error:", error);
         res.status(500).json({ message: 'Server Error' });
     }
 };
 
-
 const getMe = async (req, res) => {
     try {
-        // req.user._id is populated by your authMiddleware
         const user = await User.findById(req.user._id).select('-password');
 
         if (!user) {
@@ -181,7 +208,6 @@ const updateMe = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        //  FIXED: Map incoming data to the correct Model fields (fullName and mobile)
         if (req.body.fullName || req.body.name) {
             user.fullName = req.body.fullName || req.body.name;
         }
@@ -191,8 +217,17 @@ const updateMe = async (req, res) => {
         }
 
         const updatedUser = await user.save();
+        updatedUser.password = undefined; 
 
-        updatedUser.password = undefined; // Hide password from response
+        //  AUDIT LOG
+        logAudit({
+            req, 
+            action: 'UPDATE_OWN_PROFILE', 
+            entity: 'User', 
+            entityId: updatedUser._id,
+            details: `User updated their own personal profile details`
+        });
+
         res.json(updatedUser);
 
     } catch (error) {
@@ -206,28 +241,48 @@ const updateMe = async (req, res) => {
 // @access  Private
 const changePassword = async (req, res) => {
     try {
-        const { currentPassword, newPassword } = req.body;
+        // 1. ⚡️ FIXED: Change 'currentPassword' to 'oldPassword' to match React frontend
+        const { oldPassword, newPassword } = req.body;
 
-        // Select '+password' because schemas usually exclude it by default
         const user = await User.findById(req.user._id).select('+password');
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // 1. Verify current password
-        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        // 2. Verify current password
+        const isMatch = await bcrypt.compare(oldPassword, user.password);
         if (!isMatch) {
             return res.status(400).json({ message: 'Incorrect current password' });
         }
 
-        // 2. Hash and save new password
-        const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(newPassword, salt);
+        // 3. Update password and remove the force-change flag
+        user.password = newPassword; 
+        user.mustChangePassword = false; // ⚡️ ADDED: So they don't get stuck in a loop!
 
-        await user.save();
+        await user.save(); // Note: If you have a Mongoose pre-save hook for hashing, this automatically hashes it!
 
-        res.json({ message: 'Password updated successfully' });
+        // AUDIT LOG
+        logAudit({
+            req, 
+            action: 'CHANGE_PASSWORD', 
+            entity: 'User', 
+            entityId: user._id,
+            details: `User successfully changed their account password`
+        });
+
+        // 4. ⚡️ FIXED: Return the full user object so React can update localStorage
+        const payload = {
+            _id: user._id,
+            fullName: user.fullName,
+            email: user.email,
+            role: user.role,
+            clinicId: user.clinicId, 
+            defaultBranch: user.defaultBranch || null,
+            allowedBranches: user.allowedBranches || [],
+        };
+
+        res.json(payload);
 
     } catch (error) {
         console.error("Change Password Error:", error);
@@ -235,9 +290,12 @@ const changePassword = async (req, res) => {
     }
 };
 
-
 module.exports = {
-    getUsers, createUser, updateUser, deleteUser, getMe,
+    getUsers, 
+    createUser, 
+    updateUser, 
+    deleteUser, 
+    getMe,
     updateMe,
     changePassword
 };

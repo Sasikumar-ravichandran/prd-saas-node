@@ -1,6 +1,9 @@
 const ClinicalNote = require('../models/ClinicalNote');
 const Patient = require('../models/Patient');
 
+//  IMPORT THE AUDIT LOGGER
+const logAudit = require('../utils/auditLogger'); // Adjust path if needed
+
 // @desc    Get All Notes for a Patient (The Timeline)
 // @route   GET /api/clinical-notes/:patientId
 const getNotes = async (req, res) => {
@@ -28,15 +31,21 @@ const createNote = async (req, res) => {
       branchId: req.branchId,
       patientId,
       doctorId: req.user._id, // The logged-in doctor
-      doctorName: req.user.name,
+      doctorName: req.user.name || req.user.fullName,
       content,
       type,
       tags,
       visitDate: visitDate || Date.now()
     });
 
-    // OPTIONAL: Update Patient's "Last Visit" date automatically
+    // Update Patient's "Last Visit" date automatically
     await Patient.findByIdAndUpdate(patientId, { lastVisit: Date.now() });
+
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'CREATE_CLINICAL_NOTE', entity: 'ClinicalNote', entityId: note._id,
+      details: `Added new ${type || 'General'} clinical note`
+    });
 
     res.status(201).json(note);
   } catch (error) {
@@ -63,6 +72,12 @@ const updateMedicalAlerts = async (req, res) => {
     
     await patient.save();
 
+    //  AUDIT LOG
+    logAudit({
+      req, action: 'UPDATE_MEDICAL_ALERTS', entity: 'Patient', entityId: patient._id,
+      details: `Updated medical conditions/allergies for patient ${patient.fullName}`
+    });
+
     res.json(patient);
   } catch (error) {
     console.error(error);
@@ -82,11 +97,20 @@ const deleteNote = async (req, res) => {
             return res.status(401).json({ message: 'Not authorized' });
         }
 
+        const noteId = note._id;
         await note.deleteOne();
+
+        //  AUDIT LOG
+        logAudit({
+          req, action: 'DELETE_CLINICAL_NOTE', entity: 'ClinicalNote', entityId: noteId,
+          details: `Permanently deleted a clinical note record`
+        });
+
         res.json({ message: 'Note deleted' });
     } catch (error) {
+        console.error(error);
         res.status(500).json({ message: 'Server error' });
     }
-}
+};
 
 module.exports = { getNotes, createNote, updateMedicalAlerts, deleteNote };

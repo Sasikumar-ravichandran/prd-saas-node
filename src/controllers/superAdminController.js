@@ -57,9 +57,9 @@ const superAdminLogin = async (req, res) => {
 // ==========================================
 const getDashboardData = async (req, res) => {
   try {
-    // Extract Pagination & Filter params from query
-    const { page = 1, limit = 10, search = '', filter = 'ALL' } = req.query;
-    
+    // ⚡️ UPDATED: Added clinicType to the extracted query params
+    const { page = 1, limit = 10, search = '', filter = 'ALL', clinicType = 'ALL' } = req.query;
+
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     const skip = (pageNum - 1) * limitNum;
@@ -89,10 +89,15 @@ const getDashboardData = async (req, res) => {
 
     // 2. Build the Search & Filter Query Object for Clinics
     let query = {};
-    
-    // Filter Tab
+
+    // Filter Tab (Status)
     if (filter && filter !== 'ALL') {
       query.accountStatus = filter;
+    }
+
+    // ⚡️ ADDED: Filter by Clinic Type from Frontend Dropdown
+    if (clinicType && clinicType !== 'ALL') {
+      query.clinicType = clinicType;
     }
 
     // Search Bar (Matches Clinic Name, Clinic ID, or Admin Email)
@@ -102,7 +107,7 @@ const getDashboardData = async (req, res) => {
         email: { $regex: search, $options: 'i' },
         role: { $in: ['Clinic Admin', 'Administrator'] }
       }).select('clinicId').lean();
-      
+
       const matchingClinicIds = matchingAdmins.map(admin => admin.clinicId);
 
       // Step B: Search by Name, ID, or the matched Admin Emails
@@ -113,7 +118,7 @@ const getDashboardData = async (req, res) => {
       ];
     }
 
-    // 3. Fetch ONLY the paginated Clinics
+    // 3. Fetch ONLY the paginated Clinics matching the query
     const [clinics, totalFilteredClinics] = await Promise.all([
       Clinic.find(query).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       Clinic.countDocuments(query)
@@ -167,9 +172,13 @@ const getDashboardData = async (req, res) => {
 // @desc    Approve, Suspend, or Reactivate a Clinic
 // @route   PUT /api/super-admin/clinics/:id/status
 // ==========================================
+// ==========================================
+// @desc    Approve, Suspend, or Reactivate a Clinic
+// @route   PUT /api/super-admin/clinics/:id/status
+// ==========================================
 const updateClinicStatus = async (req, res) => {
   try {
-    const { status } = req.body;
+    const { status, reason } = req.body;
     if (!['Active', 'Pending_Approval', 'Suspended'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status value provided.' });
     }
@@ -182,6 +191,29 @@ const updateClinicStatus = async (req, res) => {
 
     if (!clinic) {
       return res.status(404).json({ message: 'Clinic not found.' });
+    }
+
+    // ⚡️ FIND THE CLINIC ADMIN EMAIL TO SEND NOTIFICATION
+    const adminUser = await User.findOne({ 
+      clinicId: clinic._id, 
+      role: { $in: ['Clinic Admin', 'Administrator'] } 
+    }).select('email').lean();
+
+    if (adminUser && adminUser.email) {
+      // Import these at the top of your controller from '../services/emailService'
+      const { sendAccountApprovedEmail, sendAccountSuspendedEmail } = require('../services/emailService');
+
+      if (status === 'Active') {
+        // Fire Approval Email asynchronously
+        sendAccountApprovedEmail(adminUser.email, clinic.name).catch(err => 
+          console.error('Failed to send approval email:', err)
+        );
+      } else if (status === 'Suspended') {
+        // Fire Suspension Email asynchronously
+        sendAccountSuspendedEmail(adminUser.email, clinic.name, reason || 'Policy or subscription update').catch(err => 
+          console.error('Failed to send suspension email:', err)
+        );
+      }
     }
 
     res.json({ message: `Clinic status updated to ${status}.`, clinic });

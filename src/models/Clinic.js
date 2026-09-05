@@ -4,6 +4,13 @@ const ClinicSchema = new mongoose.Schema({
 	// Unique Short ID for Staff Login (e.g. SMILE-001)
 	clinicId: { type: String, required: true, unique: true, uppercase: true },
 
+	clinicType: {
+        type: String,
+        enum: ['Dental', 'Dermatology', 'General_Practice', 'Ophthalmology', 'Physiotherapy'],
+        default: 'Dental', // Defaults to Dental so your existing legacy DB data doesn't break!
+        required: true
+    },
+
 	// Legal Details
 	name: { type: String, required: true }, // Display Name (e.g. Smile Care)
 	legalName: { type: String },            // Registered Name (e.g. Smile Care Pvt Ltd)

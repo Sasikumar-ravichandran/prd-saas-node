@@ -2,7 +2,10 @@ const mongoose = require('mongoose');
 const Prescription = require('../models/Prescription');
 const Drug = require('../models/Drug');
 
-//  1. Define getDrugs (Make sure this exists!)
+//  IMPORT THE AUDIT LOGGER
+const logAudit = require('../utils/auditLogger'); // Adjust path if needed
+
+// 1. Define getDrugs
 const getDrugs = async (req, res) => {
   try {
     const drugs = await Drug.find({ clinicId: req.user.clinicId }).sort({ name: 1 });
@@ -13,20 +16,14 @@ const getDrugs = async (req, res) => {
   }
 };
 
-//  2. Define createPrescription
+// 2. Define createPrescription
 const createPrescription = async (req, res) => {
   try {
     let { patientId, doctorId, medications, notes, appointmentId } = req.body;
 
-    // 🕵️ DEBUG: Log exactly what the server sees
-    console.log("Medications Type:", typeof medications);
-    console.log("Medications Value:", medications);
-
-    //  SAFE PARSING
+    // SAFE PARSING
     if (typeof medications === 'string') {
       try {
-        // If it's a string, it must be valid JSON. 
-        // We replace single quotes with double quotes just in case.
         const sanitized = medications.replace(/'/g, '"');
         medications = JSON.parse(sanitized);
       } catch (e) {
@@ -36,7 +33,7 @@ const createPrescription = async (req, res) => {
       }
     }
 
-    // 🛡️ VALIDATION: Ensure it's now a clean array
+    // VALIDATION: Ensure it's now a clean array
     if (!Array.isArray(medications)) {
       return res.status(400).json({ message: "Medications must be an array of objects." });
     }
@@ -47,8 +44,17 @@ const createPrescription = async (req, res) => {
       patientId,
       doctorId: doctorId || req.user._id,
       appointmentId: (appointmentId && mongoose.isValidObjectId(appointmentId)) ? appointmentId : null,
-      medications, // Pass the array directly
+      medications, 
       notes
+    });
+
+    //  AUDIT LOG
+    logAudit({
+      req, 
+      action: 'CREATE_PRESCRIPTION', 
+      entity: 'Prescription', 
+      entityId: prescription._id,
+      details: `Created medical prescription with ${medications.length} medication(s)`
     });
 
     res.status(201).json(prescription);
@@ -58,23 +64,24 @@ const createPrescription = async (req, res) => {
   }
 };
 
-//  3. Define getPatientPrescriptions
+// 3. Define getPatientPrescriptions
 const getPatientPrescriptions = async (req, res) => {
   try {
     const history = await Prescription.find({
       patientId: req.params.patientId,
       clinicId: req.user.clinicId
     })
-      .populate('doctorId', 'fullName role') // Using fullName from your User model
+      .populate('doctorId', 'fullName role') 
       .sort({ createdAt: -1 });
 
     res.json(history);
   } catch (error) {
+    console.error("Error fetching prescriptions:", error);
     res.status(500).json({ message: 'Error fetching history' });
   }
 };
 
-//  4. Define deletePrescription
+// 4. Define deletePrescription
 const deletePrescription = async (req, res) => {
   try {
     const { id } = req.params;
@@ -88,14 +95,24 @@ const deletePrescription = async (req, res) => {
       return res.status(401).json({ message: 'Not authorized' });
     }
 
+    const presId = prescription._id;
     await prescription.deleteOne();
+
+    //  AUDIT LOG
+    logAudit({
+      req, 
+      action: 'DELETE_PRESCRIPTION', 
+      entity: 'Prescription', 
+      entityId: presId,
+      details: `Permanently deleted medical prescription record`
+    });
+
     res.json({ message: 'Prescription deleted successfully' });
   } catch (error) {
     console.error("Delete Prescription Error:", error);
     res.status(500).json({ message: 'Server Error' });
   }
 };
-
 
 const updatePrescription = async (req, res) => {
   try {
@@ -112,13 +129,23 @@ const updatePrescription = async (req, res) => {
       return res.status(404).json({ message: 'Prescription not found' });
     }
 
+    //  AUDIT LOG
+    logAudit({
+      req, 
+      action: 'UPDATE_PRESCRIPTION', 
+      entity: 'Prescription', 
+      entityId: prescription._id,
+      details: `Updated medical prescription record`
+    });
+
     res.json(prescription);
   } catch (error) {
+    console.error("Error updating prescription:", error);
     res.status(500).json({ message: 'Error updating prescription' });
   }
 };
 
-//  5. Now Export everything together
+// 5. Export everything together
 module.exports = {
   getDrugs,
   createPrescription,

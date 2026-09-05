@@ -3,11 +3,15 @@ const AuditLog = require('../models/AuditLog');
 const logAudit = async ({ req, action, entity, entityId, details }) => {
   try {
     // In a real app, req.user is set by auth middleware
-    const user = req.user || { _id: null, name: 'System/Guest' }; 
+    const user = req.user || { _id: null, fullName: 'System/Guest' }; 
 
     await AuditLog.create({
+      //  FIXED: Attach the multi-tenant and branch IDs
+      clinicId: req.clinicId || req.user?.clinicId,
+      branchId: req.branchId || req.user?.defaultBranch, 
+      
       userId: user._id,
-      userName: user.name,
+      userName: user.fullName || user.name, // Works with your existing user model
       action,
       entity,
       entityId,

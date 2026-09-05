@@ -17,7 +17,7 @@ const createAdmin = async () => {
       process.exit(0);
     }
 
-    // ⚡️ Create account directly with PLAIN TEXT password. 
+    // Create account directly with PLAIN TEXT password. 
     // Your UserSchema.pre('save') will encrypt it automatically!
     const superAdmin = await User.create({
       name: 'Sasikumar Ravi',
