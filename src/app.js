@@ -32,7 +32,7 @@ app.use(cookieParser());
 
 const csrfProtection = (req, res, next) => {
   // Skip CSRF check for public auth routes (login, register, otp)
-  if (req.path.startsWith('/auth/')) {
+  if (req.method === 'GET' || req.path.startsWith('/auth/')) {
     return next();
   }
   
