@@ -23,7 +23,7 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: ["http://localhost:3000", "http://localhost:5173", "http://localhost:5713"],
+  origin: ["http://localhost:3000", "http://localhost:5173", "http://localhost:5713", "https://klinichub.com"],
   credentials: true
 }));
 // 2. Body Parser with Size Limits (Prevents payload-based DDoS)
