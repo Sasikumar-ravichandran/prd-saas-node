@@ -30,21 +30,6 @@ app.use(cors({
 app.use(express.json({ limit: '2mb' })); 
 app.use(cookieParser());
 
-const csrfProtection = (req, res, next) => {
-  // Skip CSRF check for public auth routes (login, register, otp)
-  if (req.method === 'GET' || req.path.startsWith('/auth/')) {
-    return next();
-  }
-  
-  const requestedWith = req.headers['x-requested-with'];
-  if (!requestedWith || requestedWith !== 'XMLHttpRequest') {
-    return res.status(403).json({ message: 'Forbidden: Invalid request origin' });
-  }
-  
-  next();
-};
-
-
 // 3. Mongo Sanitize: Scans req.body and removes malicious '$' operators
 app.use((req, res, next) => {
   if (req.body) mongoSanitize.sanitize(req.body);
@@ -62,7 +47,6 @@ const globalLimiter = rateLimit({
   legacyHeaders: false, 
 });
 app.use('/api', globalLimiter);
-app.use('/api', csrfProtection);
 // 5. Strict Auth Limiter: Stops Brute-Force Password / OTP guessing.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
