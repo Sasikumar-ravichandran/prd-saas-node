@@ -48,10 +48,10 @@ const sendOtp = async (req, res) => {
     }
 
     // Prevent OTP Resend Spam
-    const recentOtp = await Otp.findOne({ 
-      email: cleanEmail, 
+    const recentOtp = await Otp.findOne({
+      email: cleanEmail,
       purpose,
-      createdAt: { $gt: new Date(Date.now() - 60 * 1000) } 
+      createdAt: { $gt: new Date(Date.now() - 60 * 1000) }
     });
 
     if (recentOtp) {
@@ -71,7 +71,7 @@ const sendOtp = async (req, res) => {
 
     // Generate secure 6-digit OTP
     const otp = crypto.randomInt(100000, 999999).toString();
-    
+
     // Clear old OTPs and save new one
     await Otp.deleteMany({ email: cleanEmail, purpose });
     await Otp.create({
@@ -141,7 +141,7 @@ const registerClinic = async (req, res) => {
     const clinic = await Clinic.create({
       name: clinicName,
       clinicId: `CL-${Math.floor(1000 + Math.random() * 9000)}`,
-      clinicType: clinicType || 'General_Practice', 
+      clinicType: clinicType || 'General_Practice',
     });
 
     const user = await User.create({
@@ -174,7 +174,7 @@ const registerClinic = async (req, res) => {
       email: user.email,
       role: user.role,
       clinicId: clinic._id,
-      clinicType: clinic.clinicType, 
+      clinicType: clinic.clinicType,
       defaultBranch: null,
     }, 201, res);
 
@@ -230,7 +230,7 @@ const resetPasswordWithOtp = async (req, res) => {
 const verifyOtp = async (req, res) => {
   try {
     const { email, otp, purpose } = req.body;
-    
+
     if (!email || !otp || !purpose) {
       return res.status(400).json({ message: 'Email, OTP, and purpose are required.' });
     }
@@ -250,7 +250,7 @@ const verifyOtp = async (req, res) => {
     const otpRecord = await Otp.findOne({ email: cleanEmail, purpose });
 
     if (!otpRecord) return res.status(400).json({ message: 'OTP expired or not found.' });
-    
+
     if (otpRecord.attempts >= 5) {
       await Otp.deleteOne({ _id: otpRecord._id });
       return res.status(429).json({ message: 'Too many incorrect attempts.' });
@@ -291,34 +291,32 @@ const loginUser = async (req, res) => {
         return res.status(403).json({ message: 'Your clinic account has been suspended.' });
       }
 
-      console.log("DB Clinic Object:", user.clinicId); 
-        console.log("DB Clinic ID String:", user.clinicId.clinicId);
-        console.log("Frontend Payload ID:", clinicShortId);
-
       if (user.role !== 'Administrator') {
         if (!clinicShortId) return res.status(400).json({ message: 'Clinic ID is required for staff login.' });
         if (user.clinicId?.clinicId !== clinicShortId) return res.status(401).json({ message: 'Invalid Clinic ID.' });
       }
 
+      // ⚡️ 1. SIMPLE CHANGE: We extract clinicType here and add 'name'
       const payload = {
         _id: user._id,
+        name: user.name || user.fullName, // Frontend Header needs this!
         fullName: user.fullName,
         email: user.email,
         role: user.role,
-        clinicType: user.clinicId?.clinicType,
+        clinicType: user.clinicId?.clinicType || 'Dental', // Fallback just in case
       };
 
       if (user.mustChangePassword) {
         return sendTokenResponse({ ...payload, requirePasswordChange: true }, 200, res);
       }
 
-      // Utilize the new Cookie Helper
+      // ⚡️ 2. We send the payload to the browser
       sendTokenResponse({
         ...payload,
-        clinicId: user.clinicId._id,
-        clinicShortId: user.clinicId.clinicId,
+        clinicId: user.clinicId?._id || null, 
+        clinicShortId: user.clinicId?.clinicId || null,
         defaultBranch: user.defaultBranch?._id || null,
-        branchName: user.defaultBranch?.name || null,
+        branchName: user.defaultBranch?.branchName || null, // Fixed to branchName
         branchCode: user.defaultBranch?.branchCode || null,
         allowedBranches: user.allowedBranches || [],
       }, 200, res);

@@ -12,7 +12,6 @@ const createInvoice = async (req, res) => {
   try {
     const { patientId, doctorId, items, discount, notes, dueDate } = req.body;
 
-    // 1. BULLETPROOF DOCTOR RESOLUTION
     let doctor = null;
     let actualDoctorId = null;
 
@@ -33,41 +32,34 @@ const createInvoice = async (req, res) => {
     actualDoctorId = doctor._id;
     const commissionRate = doctor.doctorConfig?.commissionPercentage || 0;
 
-    // 2. Process Items & Calculate Commission WITH LAB COST DEDUCTION
     let totalAmount = 0;
     
-    // We use Promise.all because we need to query the database for every item
     const processedItems = await Promise.all(items.map(async (item) => {
       const itemCost = Number(item.cost);
       totalAmount += itemCost;
 
-      // Fetch the Procedure to check if it has a Lab Cost
       const procedureRecord = await Procedure.findOne({ 
         name: item.procedureName, 
         clinicId: req.user.clinicId 
       });
 
       const labCost = procedureRecord ? procedureRecord.labCost : 0;
-      
-      // The New Math: (Patient Cost - Lab Cost) * Commission %
-      const netProfit = Math.max(0, itemCost - labCost); // Ensure it doesn't go negative
+      const netProfit = Math.max(0, itemCost - labCost);
       const calculatedCommission = (netProfit * commissionRate) / 100;
 
       return {
         treatmentId: item.treatmentId,
         procedureName: item.procedureName,
         cost: itemCost,
-        labCostDeducted: labCost, // Record the lab cost used
-        doctorCommissionAmount: calculatedCommission // Save the accurate commission
+        labCostDeducted: labCost,
+        doctorCommissionAmount: calculatedCommission
       };
     }));
 
-    // 3. Calculate Finals
     const finalDiscount = Number(discount) || 0;
     const finalAmount = totalAmount - finalDiscount;
     const invoiceNumber = `INV-${Date.now().toString().slice(-6)}`;
 
-    // 4. Create the Invoice
     const invoice = await Invoice.create({
       clinicId: req.user.clinicId,
       branchId: req.branchId || req.user.defaultBranch,
@@ -84,16 +76,21 @@ const createInvoice = async (req, res) => {
       notes
     });
 
-    // 5. Mark Treatments as "Billed" in Patient Model
+    // Mark Treatments as "Billed" in Patient Model
     if (items.length > 0) {
       const treatmentObjectIds = items.map(i => new mongoose.Types.ObjectId(i.treatmentId));
-
+      
       await Patient.collection.updateOne(
         { _id: new mongoose.Types.ObjectId(patientId) },
         { $set: { "treatmentPlan.$[elem].billed": true } },
         { arrayFilters: [{ "elem._id": { $in: treatmentObjectIds } }] }
       );
     }
+
+    // ⚡️ FIX: Update the Patient's totalCost so the table knows what was billed!
+    await Patient.findByIdAndUpdate(patientId, {
+      $inc: { totalCost: finalAmount }
+    });
 
     res.status(201).json(invoice);
 
@@ -189,6 +186,7 @@ const recordPayment = async (req, res) => {
     });
 
     invoice.balance -= paymentAmount;
+    invoice.paidAmount = (invoice.paidAmount || 0) + paymentAmount; 
 
     if (invoice.balance === 0) {
       invoice.status = 'Paid';
@@ -197,6 +195,11 @@ const recordPayment = async (req, res) => {
     }
 
     await invoice.save();
+    
+    // ⚡️ FIX: Update the Patient's totalPaid so the patient table updates to "Paid" / "Due: 0"!
+    await Patient.findByIdAndUpdate(invoice.patientId, {
+      $inc: { totalPaid: paymentAmount }
+    });
     
     res.json({ message: 'Payment recorded successfully', invoice });
 
