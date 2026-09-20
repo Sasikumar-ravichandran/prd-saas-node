@@ -3,6 +3,7 @@ const Appointment = require('../models/Appointment');
 const Payment = require('../models/Payment');
 const Expense = require('../models/Expense');
 const Attendance = require('../models/Attendance');
+const Invoice = require('../models/Invoice'); // ⚡️ ADDED: Invoice model for accurate revenue
 
 const getPayrollReport = async (req, res) => {
     try {
@@ -40,14 +41,14 @@ const getPayrollReport = async (req, res) => {
         if (mode === 'custom') {
             const startStr = `${start.getFullYear()}-${(start.getMonth() + 1).toString().padStart(2, '0')}-${start.getDate().toString().padStart(2, '0')}`;
             const endStr = `${end.getFullYear()}-${(end.getMonth() + 1).toString().padStart(2, '0')}-${end.getDate().toString().padStart(2, '0')}`;
-            dateFilter = { $gte: startStr, $lte: endStr };
+            dateFilter = { $gte: startStr,$lte: endStr };
         } else {
-            //  FIX 1: Uses the safely parsed 'y' and 'm' numbers
+            // FIX 1: Uses the safely parsed 'y' and 'm' numbers
             const padMonth = m.toString().padStart(2, '0');
             dateFilter = { $regex: `^${y}-${padMonth}` };
         }
 
-        //  FIX 2: Build strict query including branchId
+        // FIX 2: Build strict query including branchId
         const attendanceQuery = { clinicId, date: dateFilter };
         if (branchId) attendanceQuery.branchId = branchId; 
 
@@ -66,7 +67,7 @@ const getPayrollReport = async (req, res) => {
             const baseSalary = staff.baseSalary || 0;
             const commissionRate = staff.commissionRate || 0;
 
-            // ---  FIX 3: BULLETPROOF ATTENDANCE MATH ---
+            // --- FIX 3: BULLETPROOF ATTENDANCE MATH ---
             const staffAttendance = attendanceRecords.filter(a => a.userId.toString() === staff._id.toString());
 
             // Helper function to safely read status strings from DB
@@ -107,7 +108,7 @@ const getPayrollReport = async (req, res) => {
                 const appointments = await Appointment.find({
                     doctorId: staff._id,
                     status: 'Completed',
-                    start: { $gte: start, $lte: end }
+                    start: { $gte: start,$lte: end }
                 }).populate('patientId', 'fullName');
 
                 let totalRevenueGenerated = 0;
@@ -135,7 +136,7 @@ const getPayrollReport = async (req, res) => {
                 const upcomingAppointments = await Appointment.find({
                     doctorId: staff._id,
                     status: 'Scheduled',
-                    start: { $gte: nextMonthStart, $lte: nextMonthEnd }
+                    start: { $gte: nextMonthStart,$lte: nextMonthEnd }
                 });
 
                 const projectedRevenue = upcomingAppointments.reduce((sum, appt) => sum + (appt.cost || 1000), 0);
@@ -179,11 +180,39 @@ const getPayrollReport = async (req, res) => {
         const cleanPayrollData = payrollData.filter(Boolean);
         const totalPayrollDue = cleanPayrollData.reduce((sum, s) => sum + s.payoutDue, 0);
 
-        const payments = await Payment.find({ clinicId, branchId, createdAt: { $gte: start, $lte: end } });
-        const grossRevenue = payments.reduce((sum, p) => sum + p.amount, 0);
+        // ⚡️ THE FIX: CALCULATE TRUE GROSS REVENUE FROM ACTUAL PATIENT INVOICES
+        const invoices = await Invoice.find({ 
+            clinicId, 
+            branchId,
+            status: { $in: ['Paid', 'Partial'] } 
+        });
 
-        const expenses = await Expense.find({ clinicId, branchId, date: { $gte: start, $lte: end }, category: { $ne: 'Salaries' } });
-        const operatingExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+        let grossRevenue = 0;
+        
+        invoices.forEach(inv => {
+            // New Format: Check the nested payments array
+            if (inv.payments && inv.payments.length > 0) {
+                inv.payments.forEach(payment => {
+                    const pDate = new Date(payment.date);
+                    if (pDate >= start && pDate <= end) {
+                        grossRevenue += Number(payment.amount) || 0;
+                    }
+                });
+            } 
+            // Legacy Format: Fallback to updatedAt
+            else {
+                const uDate = new Date(inv.updatedAt);
+                if (uDate >= start && uDate <= end) {
+                    const assumedPaid = (inv.finalAmount || 0) - (inv.balance || 0);
+                    if (assumedPaid > 0) {
+                        grossRevenue += assumedPaid;
+                    }
+                }
+            }
+        });
+
+        const expenses = await Expense.find({ clinicId, branchId, date: { $gte: start, $lte: end }, category: {$ne: 'Salaries' } });
+        const operatingExpenses = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
         const netProfit = grossRevenue - operatingExpenses - totalPayrollDue;
 

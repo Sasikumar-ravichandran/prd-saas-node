@@ -1,8 +1,8 @@
 const User = require('../models/User');
 const Appointment = require('../models/Appointment');
-const Payment = require('../models/Payment');
+const Invoice = require('../models/Invoice'); // ⚡️ CHANGED: Import Invoice instead of Payment
 const Patient = require('../models/Patient');
-const Expense = require('../models/Expense')
+const Expense = require('../models/Expense');
 const mongoose = require('mongoose');
 
 const getDoctorStats = async (req, res) => {
@@ -159,26 +159,22 @@ const getDoctorStats = async (req, res) => {
     }
 };
 
-// @desc    Get Receptionist Dashboard Data (Scoped to Branch)
-// @desc    Get Receptionist Dashboard Data (Scoped to Branch)
 const getReceptionStats = async (req, res) => {
     try {
         const clinicId = req.user.clinicId;
-        const branchId = req.branchId; // <--- 1. Get Active Branch
+        const branchId = req.branchId; 
 
         const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
         const endOfDay = new Date(); endOfDay.setHours(23, 59, 59, 999);
         const now = new Date();
 
         // --- 1. DOCTOR STATUS (TRAFFIC LIGHTS) ---
-        //  FIX 1: Add 'fullName' to the .select() statement!
         const doctors = await User.find({
             clinicId,
             role: { $in: ['Doctor', 'doctor'] },
             allowedBranches: branchId
         }).select('name fullName _id');
 
-        // Check Calendar (Appointments in THIS branch)
         const activeAppointments = await Appointment.find({
             clinicId,
             branchId,
@@ -187,7 +183,6 @@ const getReceptionStats = async (req, res) => {
             status: 'In Progress'
         }).populate('patientId', 'fullName');
 
-        // Check Clinical Charts (Patients active in THIS branch)
         const activePatients = await Patient.find({
             clinicId,
             branchId,
@@ -196,12 +191,8 @@ const getReceptionStats = async (req, res) => {
         }).select('fullName assignedDoctor treatmentPlan');
 
         const doctorStatus = doctors.map(doc => {
-            //  FIX 2: Safely grab the doctor's name, prioritizing fullName
             const docName = doc.fullName || doc.name || 'Unknown Doctor';
-
             const activeAppt = activeAppointments.find(a => a.doctorId && a.doctorId.toString() === doc._id.toString());
-
-            //  FIX 3: Check if assignedDoctor matches either fullName or name
             const clinicalPatient = activePatients.find(p =>
                 (p.assignedDoctor === doc.fullName || p.assignedDoctor === doc.name) &&
                 p.treatmentPlan.some(t => t.status === 'In Progress')
@@ -220,8 +211,6 @@ const getReceptionStats = async (req, res) => {
                 patientName = clinicalPatient.fullName;
                 timer = 'Chart';
             }
-
-            //  FIX 4: Pass the correct 'docName' to the frontend
             return { id: doc._id, doctor: docName, status, patient: patientName, timer };
         });
 
@@ -237,12 +226,9 @@ const getReceptionStats = async (req, res) => {
 
         const todayFlow = await Promise.all(appointmentsToday.map(async (appt) => {
             let patient = appt.patientId;
-            // Smart Search (Scoped to Branch)
             if (!patient && appt.title) {
                 const foundPatient = await Patient.findOne({
-                    clinicId,
-                    branchId,
-                    fullName: new RegExp(`^${appt.title.trim()}$`, 'i')
+                    clinicId, branchId, fullName: new RegExp(`^${appt.title.trim()}$`, 'i')
                 });
                 if (foundPatient) patient = foundPatient;
             }
@@ -264,7 +250,6 @@ const getReceptionStats = async (req, res) => {
                 name: patient.fullName || appt.title || 'Walk-in',
                 displayId: patient.patientId || '',
                 mongoId: patient._id || null,
-                //  FIX 5: Fallback for doctor name in the flow table too
                 doc: appt.doctorId?.fullName || appt.doctorId?.name || 'Unassigned',
                 status: appt.status || 'Scheduled',
                 payStatus: payStatus,
@@ -272,25 +257,49 @@ const getReceptionStats = async (req, res) => {
             };
         }));
 
-        // --- 3. CASH DRAWER (Money collected in THIS Branch) ---
-        const todaysPayments = await Payment.find({
+        // --- 3. ⚡️ CASH DRAWER (Pulling from Invoices instead of Payments) ---
+        const todaysInvoices = await Invoice.find({
             clinicId,
             branchId,
-            createdAt: { $gte: startOfDay, $lte: endOfDay }
+            $or: [
+                { "payments.date": { $gte: startOfDay, $lte: endOfDay } },
+                { status: { $in: ['Paid', 'Partial'] }, updatedAt: { $gte: startOfDay, $lte: endOfDay } }
+            ]
         });
 
-        //  NEW: Fetch Today's Expenses for this branch
+        let totalCollected = 0;
+        let totalCash = 0;
+        let totalOnline = 0;
+
+        todaysInvoices.forEach(inv => {
+            if (inv.payments && inv.payments.length > 0) {
+                inv.payments.forEach(p => {
+                    const d = new Date(p.date);
+                    if (d >= startOfDay && d <= endOfDay) {
+                        const amt = Number(p.amount) || 0;
+                        totalCollected += amt;
+                        if (p.method === 'Cash') totalCash += amt;
+                        else totalOnline += amt;
+                    }
+                });
+            } else {
+                const d = new Date(inv.updatedAt);
+                if (d >= startOfDay && d <= endOfDay) {
+                    const amt = Math.max(0, inv.finalAmount - (inv.balance || 0));
+                    totalCollected += amt;
+                    totalOnline += amt; // Default legacy to online
+                }
+            }
+        });
+
         const todaysExpenses = await Expense.find({
-            clinicId,
-            branchId,
-            date: { $gte: startOfDay, $lte: endOfDay }
+            clinicId, branchId, date: { $gte: startOfDay, $lte: endOfDay }
         });
 
         const cashDrawer = {
-            total: todaysPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
-            cash: todaysPayments.filter(p => p.method === 'Cash').reduce((sum, p) => sum + (p.amount || 0), 0),
-            online: todaysPayments.filter(p => ['UPI', 'GPay', 'Card', 'NetBanking'].includes(p.method)).reduce((sum, p) => sum + (p.amount || 0), 0),
-            // NEW: Calculate total expenses for the UI
+            total: totalCollected,
+            cash: totalCash,
+            online: totalOnline,
             expenses: todaysExpenses.reduce((sum, e) => sum + (e.amount || 0), 0)
         };
 
@@ -302,6 +311,35 @@ const getReceptionStats = async (req, res) => {
     }
 };
 
+// ⚡️ HELPER FUNCTION: Safely calculate revenue from Invoices for a specific date range
+const calculateRevenue = async (clinicId, branchId, startDate, endDate) => {
+    const invoices = await Invoice.find({
+        clinicId,
+        branchId,
+        $or: [
+            { "payments.date": { $gte: startDate, $lte: endDate } },
+            { status: { $in: ['Paid', 'Partial'] }, updatedAt: { $gte: startDate, $lte: endDate } }
+        ]
+    });
+
+    let total = 0;
+    invoices.forEach(inv => {
+        if (inv.payments && inv.payments.length > 0) {
+            inv.payments.forEach(p => {
+                const d = new Date(p.date);
+                if (d >= startDate && d <= endDate) {
+                    total += (Number(p.amount) || 0);
+                }
+            });
+        } else {
+            const d = new Date(inv.updatedAt);
+            if (d >= startDate && d <= endDate) {
+                total += Math.max(0, inv.finalAmount - (inv.balance || 0));
+            }
+        }
+    });
+    return total;
+};
 
 // @desc    Get Admin Dashboard Data (Scoped to Branch)
 const getAdminStats = async (req, res) => {
@@ -311,19 +349,20 @@ const getAdminStats = async (req, res) => {
 
         const now = new Date();
 
-        // 1. Time Ranges for Financials (Monthly/Daily)
+        // 1. Time Ranges for Financials
         const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(); endOfDay.setHours(23, 59, 59, 999);
+        
         const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        
         const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+        const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
 
-        // 2. REVENUE (Money In) - Current Month 
-        const currentMonthPayments = await Payment.find({
-            clinicId,
-            branchId,
-            createdAt: { $gte: startOfMonth }
-        });
-        const revenueMonth = currentMonthPayments.reduce((acc, p) => acc + p.amount, 0);
+        // 2. REVENUE (Money In) - ⚡️ Replaced Payments with our Invoice Helper
+        const revenueToday = await calculateRevenue(clinicId, branchId, startOfDay, endOfDay);
+        const revenueMonth = await calculateRevenue(clinicId, branchId, startOfMonth, endOfMonth);
+        const revenueLastMonth = await calculateRevenue(clinicId, branchId, startOfLastMonth, endOfLastMonth);
 
         // 3. EXPENSES (Money Out) - Current Month 
         const currentMonthExpenses = await Expense.find({
@@ -336,18 +375,11 @@ const getAdminStats = async (req, res) => {
         // 4. NET PROFIT & GROWTH
         const netProfit = revenueMonth - expenseMonth;
 
-        const lastMonthPayments = await Payment.find({
-            clinicId,
-            branchId,
-            createdAt: { $gte: startOfLastMonth, $lte: endOfLastMonth }
-        });
-        const revenueLastMonth = lastMonthPayments.reduce((acc, p) => acc + p.amount, 0);
-
         let growthPercent = 0;
         if (revenueLastMonth > 0) growthPercent = ((revenueMonth - revenueLastMonth) / revenueLastMonth) * 100;
         else if (revenueMonth > 0) growthPercent = 100;
 
-        // 5. EXPENSE BREAKDOWN (Aggregate by Category) 
+        // 5. EXPENSE BREAKDOWN 
         const expenseBreakdown = await Expense.aggregate([
             {
                 $match: {
@@ -372,40 +404,59 @@ const getAdminStats = async (req, res) => {
             createdAt: { $gte: startOfMonth }
         });
 
-        // 7. TODAY'S REVENUE 
-        const todaysPayments = await Payment.find({
-            clinicId,
+        // 8. ⚡️ MIXED TRANSACTIONS STREAM (Invoices + Expenses) 
+        const recentInvoices = await Invoice.find({ 
+            clinicId, 
             branchId,
-            createdAt: { $gte: startOfDay }
-        });
-        const revenueToday = todaysPayments.reduce((acc, p) => acc + p.amount, 0);
+            status: { $in: ['Paid', 'Partial'] }
+        })
+            .sort({ updatedAt: -1 })
+            .limit(10)
+            .populate('patientId', 'fullName')
+            .lean();
 
-        // 8. MIXED TRANSACTIONS STREAM (Payments + Expenses) 
-        const recentPayments = await Payment.find({ clinicId, branchId })
-            .sort({ createdAt: -1 }).limit(10).populate('patientId', 'fullName').lean();
+        let paymentStream = [];
+        recentInvoices.forEach(inv => {
+            if (inv.payments && inv.payments.length > 0) {
+                inv.payments.forEach(p => {
+                    paymentStream.push({
+                        id: inv.invoiceNumber,
+                        details: inv.patientId?.fullName || 'Walk-in Patient',
+                        amount: p.amount,
+                        method: p.method || 'System',
+                        date: p.date,
+                        category: 'Patient Payment',
+                        type: 'Income'
+                    });
+                });
+            } else {
+                const amt = Math.max(0, inv.finalAmount - (inv.balance || 0));
+                if (amt > 0) {
+                    paymentStream.push({
+                        id: inv.invoiceNumber,
+                        details: inv.patientId?.fullName || 'Walk-in Patient',
+                        amount: amt,
+                        method: 'System',
+                        date: inv.updatedAt,
+                        category: 'Patient Payment',
+                        type: 'Income'
+                    });
+                }
+            }
+        });
 
         const recentExpenses = await Expense.find({ clinicId, branchId })
             .sort({ date: -1 })
             .limit(10)
-            .populate('recordedBy', 'fullName name') // NEW: Fetch the user who logged it
+            .populate('recordedBy', 'fullName name') 
             .lean();
 
         let mixedTransactions = [
-            ...recentPayments.map(t => ({
-                id: t.receiptNumber || 'PAY',
-                details: t.patientId?.fullName || 'Unknown',
-                amount: t.amount,
-                method: t.method,
-                date: t.createdAt,
-                category: 'Patient Payment',
-                type: 'Income'
-            })),
+            ...paymentStream,
             ...recentExpenses.map(e => {
-                //  NEW: Extract staff name securely
                 const staffName = e.recordedBy?.fullName || e.recordedBy?.name || 'Staff';
                 return {
                     id: 'EXP',
-                    //  NEW: Append the staff name to the transaction details
                     details: `${e.vendor || e.title || 'Expense'} (By: ${staffName})`, 
                     amount: e.amount,
                     method: e.paymentMethod,
@@ -416,10 +467,11 @@ const getAdminStats = async (req, res) => {
             })
         ];
 
+        // Sort both together and take the 10 most recent
         mixedTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
         mixedTransactions = mixedTransactions.slice(0, 10);
 
-        //  9. TARGET APPOINTMENTS [Scoped to Branch & Requested Date]
+        // 9. TARGET APPOINTMENTS
         const queryDate = req.query.date ? new Date(req.query.date) : new Date();
         const startOfTargetDay = new Date(queryDate); startOfTargetDay.setHours(0, 0, 0, 0);
         const endOfTargetDay = new Date(queryDate); endOfTargetDay.setHours(23, 59, 59, 999);
@@ -436,8 +488,6 @@ const getAdminStats = async (req, res) => {
 
         const formattedAppointments = targetAppointments.map(appt => {
             const patientMongoId = appt.patientId?._id?.toString() || '';
-
-            // Grab your custom 'PID-001', or generate a fallback that matches your exact style ('PID-A2B3')
             const displayId = appt.patientId?.patientId;
 
             return {

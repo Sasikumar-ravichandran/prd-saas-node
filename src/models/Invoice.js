@@ -28,6 +28,15 @@ const InvoiceSchema = new mongoose.Schema({
   paidAmount: { type: Number, default: 0 },      
   balance: { type: Number },                     
 
+  // ⚡️ NEW: You MUST define the payments array so Mongoose doesn't delete it!
+  payments: [{
+    amount: { type: Number, required: true },
+    method: { type: String },
+    reference: { type: String },
+    date: { type: Date, default: Date.now },
+    recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  }],
+
   dueDate: { type: Date },
   notes: String,
   status: {

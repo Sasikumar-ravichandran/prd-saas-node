@@ -38,7 +38,7 @@ exports.getMyStats = async (req, res) => {
             .filter(a => ['Absent', 'Unpaid Leave', 'Half-Day'].includes(a.status))
             .map(a => ({ date: a.date, status: a.status }));
 
-        const baseSalary = user.salary || 0;
+        const baseSalary = user.baseSalary || 0;
         const dailyRate = baseSalary / 30;
         const lopDeduction = lopDays * dailyRate;
 

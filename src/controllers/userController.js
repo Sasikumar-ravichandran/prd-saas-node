@@ -60,7 +60,7 @@ const createUser = async (req, res) => {
     try {
         const {
             name, fullName, email, role, status, mobile, password,
-            allowedBranches, defaultBranch, doctorConfig
+            allowedBranches, defaultBranch, doctorConfig, baseSalary, commissionRate
         } = req.body;
 
         // 1. Branch Validation
@@ -83,7 +83,9 @@ const createUser = async (req, res) => {
             mustChangePassword: true,
             defaultBranch: targetBranch,
             allowedBranches: allowedBranches && allowedBranches.length > 0 ? allowedBranches : [targetBranch],
-            doctorConfig: role === 'Doctor' ? doctorConfig : undefined
+            doctorConfig: role === 'Doctor' ? doctorConfig : undefined,
+            baseSalary: baseSalary !== undefined ? baseSalary : 0,
+            commissionRate: commissionRate !== undefined ? commissionRate : 0
         });
 
         // 3. POPULATE BEFORE RESPONDING
@@ -184,13 +186,32 @@ const deleteUser = async (req, res) => {
 
 const getMe = async (req, res) => {
     try {
-        const user = await User.findById(req.user._id).select('-password');
+        const user = await User.findById(req.user._id)
+            .populate('clinicId')
+            .populate('defaultBranch', 'name branchName branchCode')
+            .populate('allowedBranches', 'name branchName branchCode')
+            .select('-password');
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        res.json(user);
+        const payload = {
+            _id: user._id,
+            name: user.name || user.fullName,
+            fullName: user.fullName,
+            email: user.email,
+            role: user.role,
+            clinicType: user.clinicId?.clinicType,
+            clinicId: user.clinicId?._id || null,
+            clinicShortId: user.clinicId?.clinicId || null,
+            defaultBranch: user.defaultBranch?._id || null,
+            branchName: user.defaultBranch?.branchName || user.defaultBranch?.name || null,
+            branchCode: user.defaultBranch?.branchCode || null,
+            allowedBranches: user.allowedBranches || [],
+        };
+
+        res.json(payload);
     } catch (error) {
         console.error("Get Me Error:", error);
         res.status(500).json({ message: 'Server Error' });
@@ -271,15 +292,20 @@ const changePassword = async (req, res) => {
             details: `User successfully changed their account password`
         });
 
-        // 4. ⚡️ FIXED: Return the full user object so React can update localStorage
         const payload = {
-            _id: user._id,
-            fullName: user.fullName,
-            email: user.email,
-            role: user.role,
-            clinicId: user.clinicId, 
-            defaultBranch: user.defaultBranch || null,
-            allowedBranches: user.allowedBranches || [],
+            _id: updatedUser._id,
+            name: updatedUser.name || updatedUser.fullName,
+            fullName: updatedUser.fullName,
+            email: updatedUser.email,
+            role: updatedUser.role,
+            clinicType: updatedUser.clinicId?.clinicType, 
+            
+            clinicId: updatedUser.clinicId?._id || null,
+            clinicShortId: updatedUser.clinicId?.clinicId || null,
+            defaultBranch: updatedUser.defaultBranch?._id || null,
+            branchName: updatedUser.defaultBranch?.branchName || updatedUser.defaultBranch?.name || null,
+            branchCode: updatedUser.defaultBranch?.branchCode || null,
+            allowedBranches: updatedUser.allowedBranches || [],
         };
 
         res.json(payload);

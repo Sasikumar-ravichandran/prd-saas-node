@@ -5,7 +5,7 @@ const Invoice = require('../models/Invoice');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const { uploadFileToR2, deleteFileFromR2 } = require('../services/s3Service');
+const { uploadFileToR2, deleteFileFromR2, getFileSizeFromR2 } = require('../services/s3Service');
 const v4 = require('uuid').v4;
 
 //  IMPORT THE AUDIT LOGGER
@@ -20,18 +20,49 @@ const uploadPatientFile = async (req, res) => {
 
     if (!file) return res.status(400).json({ message: 'No file provided' });
 
-    const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    // 1. Calculate file size in MB
+    const fileMB = parseFloat((file.size / (1024 * 1024)).toFixed(2));
+
+    // 2. ⚡️ Fetch Clinic securely (Handles both MongoDB _id and custom strings)
+    let clinicQuery = {};
+    if (mongoose.Types.ObjectId.isValid(req.user.clinicId)) {
+      clinicQuery._id = req.user.clinicId;
+    } else {
+      clinicQuery.clinicId = req.user.clinicId;
+    }
+
+    const clinic = await Clinic.findOne(clinicQuery);
+    if (!clinic) return res.status(404).json({ message: 'Clinic not found' });
+    
+    const MAX_STORAGE_MB = 999; 
+    const currentStorage = clinic.storageUsedMB || 0; // Fallback to 0 if field doesn't exist yet
+
+    if (currentStorage + fileMB > MAX_STORAGE_MB) {
+      return res.status(403).json({ 
+        message: `Storage limit exceeded! File is ${fileMB}MB, but you only have ${(MAX_STORAGE_MB - currentStorage).toFixed(2)}MB left.` 
+      });
+    }
+
+    // 3. ⚡️ Proceed with Patient validation (Safely handles PID-1001 or MongoDB _id)
+    let patientQuery = { clinicId: req.user.clinicId, branchId: req.branchId };
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      patientQuery._id = id;
+    } else {
+      patientQuery.patientId = id;
+    }
+
+    const patient = await Patient.findOne(patientQuery);
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
     const fileExtension = file.originalname.split('.').pop();
     const uniqueKey = `${req.user.clinicId}/${patient._id}/${v4()}.${fileExtension}`;
 
-    //Call your clean S3 service to handle the actual upload
+    // 4. Call your clean S3 service to handle the actual upload
     await uploadFileToR2(file.buffer, file.mimetype, uniqueKey);
 
     const fileUrl = `${process.env.AWS_CDN_DOMAIN}/${uniqueKey}`;
 
-    // Update patient attachments schema
+    // 5. Update patient attachments schema
     if (!patient.attachments) patient.attachments = { photo: '', scans: [], documents: [] };
 
     if (type === 'photo') {
@@ -46,6 +77,18 @@ const uploadPatientFile = async (req, res) => {
 
     patient.markModified('attachments');
     await patient.save();
+
+    // 6. ⚡️ Update the Clinic's storage quota safely using the verified clinicQuery
+    await Clinic.findOneAndUpdate(
+      clinicQuery,
+      { $inc: { storageUsedMB: fileMB } }
+    );
+
+    // 7. Audit Log (Added fileMB for tracking)
+    logAudit({
+      req, action: 'UPLOAD_FILE_CLOUD', entity: 'Patient', entityId: patient._id,
+      details: `Uploaded new ${type} (${fileMB}MB) to cloud storage`
+    });
 
     res.status(200).json({ message: 'File uploaded successfully', fileUrl, attachments: patient.attachments });
   } catch (error) {
@@ -119,6 +162,7 @@ const deleteCloudAttachment = async (req, res) => {
     const patient = await Patient.findOne({ _id: id, clinicId: req.user.clinicId, branchId: req.branchId });
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
+    // 1. Remove the URL from the patient's MongoDB record
     if (patient.attachments) {
       if (patient.attachments.scans) patient.attachments.scans = patient.attachments.scans.filter(url => url !== fileUrl);
       if (patient.attachments.documents) patient.attachments.documents = patient.attachments.documents.filter(url => url !== fileUrl);
@@ -126,16 +170,33 @@ const deleteCloudAttachment = async (req, res) => {
     }
     await patient.save();
 
+    let fileMB = 0; // Default to 0 MB
+
     const cdnDomain = process.env.AWS_CDN_DOMAIN;
     if (fileUrl.includes(cdnDomain)) {
       const fileKey = fileUrl.split(`${cdnDomain}/`)[1];
-      if (fileKey) await deleteFileFromR2(fileKey);
+      
+      if (fileKey) {
+        // 2. ⚡️ Ask R2 exactly how big the file is BEFORE we destroy it
+        fileMB = await getFileSizeFromR2(fileKey);
+        
+        // 3. Now permanently delete it from Cloudflare R2
+        await deleteFileFromR2(fileKey);
+      }
     }
 
-    //  AUDIT LOG
+    // 4. ⚡️ THE REFUND: Give the clinic their storage space back!
+    if (fileMB > 0) {
+      await Clinic.findOneAndUpdate(
+        { clinicId: req.user.clinicId },
+        { $inc: { storageUsedMB: -fileMB } } // The minus sign subtracts the usage
+      );
+    }
+
+    // 5. ⚡️ AUDIT LOG
     logAudit({
       req, action: 'DELETE_FILE', entity: 'Patient', entityId: patient._id,
-      details: `Deleted a cloud attachment from patient profile`
+      details: `Deleted a cloud attachment and refunded ${fileMB}MB`
     });
 
     res.status(200).json({ message: 'File permanently deleted', attachments: patient.attachments });
@@ -441,7 +502,15 @@ const updateTreatmentStatus = async (req, res) => {
     const { id, itemId } = req.params;
     const { status } = req.body;
 
-    const patient = await Patient.findOne({ patientId: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    // ⚡️ FIX: Check if 'id' is a MongoDB _id or a custom PID
+    let query = { clinicId: req.user.clinicId, branchId: req.branchId };
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      query._id = id;
+    } else {
+      query.patientId = id;
+    }
+
+    const patient = await Patient.findOne(query);
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
     const treatment = patient.treatmentPlan.id(itemId);
@@ -456,7 +525,7 @@ const updateTreatmentStatus = async (req, res) => {
     recalculateTotalCost(patient);
     await patient.save();
 
-    //  AUDIT LOG
+    // AUDIT LOG
     logAudit({
       req, action: 'UPDATE_TREATMENT_STATUS', entity: 'Patient', entityId: patient._id,
       details: `Changed treatment '${treatment.procedure}' status from ${oldStatus} to ${status}`
@@ -479,7 +548,16 @@ const recalculateTotalCost = (patient) => {
 const deleteTreatment = async (req, res) => {
   try {
     const { id, itemId } = req.params;
-    const patient = await Patient.findOne({ patientId: id, clinicId: req.user.clinicId, branchId: req.branchId });
+    
+    // ⚡️ FIX: Apply the same check here so deletes don't 404!
+    let query = { clinicId: req.user.clinicId, branchId: req.branchId };
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      query._id = id;
+    } else {
+      query.patientId = id;
+    }
+
+    const patient = await Patient.findOne(query);
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
     const treatment = patient.treatmentPlan.id(itemId);
@@ -491,7 +569,7 @@ const deleteTreatment = async (req, res) => {
     recalculateTotalCost(patient);
     await patient.save();
 
-    //  AUDIT LOG
+    // AUDIT LOG
     logAudit({
       req, action: 'DELETE_TREATMENT', entity: 'Patient', entityId: patient._id,
       details: `Deleted treatment plan item: ${procedureName}`
@@ -614,7 +692,15 @@ const bulkCompleteTreatments = async (req, res) => {
     const { id } = req.params;
     const { treatmentIds } = req.body; 
 
-    const patient = await Patient.findById(id);
+    // ⚡️ FIX: Apply flexible ID query so PID strings don't cause a 404
+    let query = { clinicId: req.user.clinicId };
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      query._id = id;
+    } else {
+      query.patientId = id;
+    }
+
+    const patient = await Patient.findOne(query);
     if (!patient) return res.status(404).json({ message: 'Patient not found' });
 
     let isModified = false;
@@ -630,7 +716,7 @@ const bulkCompleteTreatments = async (req, res) => {
       recalculateTotalCost(patient); 
       await patient.save();
       
-      //  AUDIT LOG
+      // AUDIT LOG
       logAudit({
         req, action: 'BULK_COMPLETE_TREATMENT', entity: 'Patient', entityId: patient._id,
         details: `Marked ${treatmentIds.length} treatment(s) as Completed simultaneously`
